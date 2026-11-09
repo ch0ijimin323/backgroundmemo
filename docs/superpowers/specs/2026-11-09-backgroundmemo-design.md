@@ -95,14 +95,14 @@ Work lands on branches and is pushed to the private GitHub repository `backgroun
 
 Two fixed tabs sit in the tab bar alongside memo tabs: `계획` and `할 일`. Exactly one of each exists; they cannot be closed or split, but they can be reordered. Files saved before these tabs existed gain them on load, keeping existing memos.
 
-- **Planner.** A date header with previous, next, and today controls above one editable row per hour from 06:00 to 23:00. It opens on today and follows the date across midnight when today is showing.
+- **Planner.** A date header with previous, next, and today controls above one editable row every 10 minutes from 06:00 to 23:50. It opens on today near the current time, and other days near 08:40, and follows the date across midnight when today is showing. Entries are keyed by minutes from midnight; hour keys from older files convert on load, and no text is lost if a slot is already taken.
 - **To-do.** One list independent of dates. Enter adds, a checkbox completes, completed items sink below open items, and items can be edited and deleted.
 - **Storage.** `planner.json` and `todos.json` beside `workspace.json`, using atomic debounced saves. Failures retry and are reported at quit, as for documents. A corrupt file is kept as a backup. An unreadable file is never overwritten.
 
 ## School timetable
 
-The planner shows one class's timetable between the date header and the hour rows. It uses the official NEIS Open API (`hisTimetable`). 컴시간 is not used because it has no official API and its data calls are encrypted.
+The planner shows one class's timetable inside its 10-minute rows, placed by the school's bell schedule. It uses the official NEIS Open API (`hisTimetable`). 컴시간 is not used because it has no official API and its data calls are encrypted.
 
 - **Requests.** One day at a time, never on weekends, and at most one successful fetch per day per session. Without an API key the request asks for 5 rows; it never pages or splits requests to get around that limit, and a day with more classes shows as partial. The API key is stored in an owner-only file (`neis-api-key`, mode 0600) in the app data folder, because an ad-hoc signed app triggers keychain password prompts after every rebuild.
 - **Storage.** `timetable.json` beside `workspace.json`. Failed fetches never replace the cache. Cache save failures are logged and do not block quitting, because the data can be fetched again.
-- **Display.** Read-only and separate from the planner's entries, which it never changes.
+- **Display.** Each class spans five slots (50 minutes) under a faint band, and its first slot shows a label such as `1교시 공통수학2`. Periods with no bell time are not placed. Rows stay editable, classes never change the planner's entries, and one line under the header appears only while loading, after a failure, or when the day is partial.

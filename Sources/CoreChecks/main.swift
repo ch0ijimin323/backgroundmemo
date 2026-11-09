@@ -256,15 +256,15 @@ private func run() async -> Int {
 
     record(await check("planner entries and Gregorian day key") {
         var planner = PlannerState()
-        planner.setEntry(day: "2026-11-10", hour: 5, text: "ignored")
-        planner.setEntry(day: "2026-11-10", hour: 24, text: "ignored")
-        try expect(planner.days.isEmpty, "out-of-range hour stored")
-        planner.setEntry(day: "2026-11-10", hour: 6, text: "  morning  ")
-        planner.setEntry(day: "2026-11-10", hour: 23, text: "night")
-        try expect(planner.entry(day: "2026-11-10", hour: 6) == "  morning  ", "entry text changed")
-        planner.setEntry(day: "2026-11-10", hour: 6, text: " \n ")
-        try expect(planner.entry(day: "2026-11-10", hour: 6).isEmpty && planner.days.count == 1, "blank entry not removed")
-        planner.setEntry(day: "2026-11-10", hour: 23, text: "\t")
+        planner.setEntry(day: "2026-11-10", minute: 300, text: "ignored")
+        planner.setEntry(day: "2026-11-10", minute: 1440, text: "ignored")
+        try expect(planner.days.isEmpty, "out-of-range minute stored")
+        planner.setEntry(day: "2026-11-10", minute: 360, text: "  morning  ")
+        planner.setEntry(day: "2026-11-10", minute: 1380, text: "night")
+        try expect(planner.entry(day: "2026-11-10", minute: 360) == "  morning  ", "entry text changed")
+        planner.setEntry(day: "2026-11-10", minute: 360, text: " \n ")
+        try expect(planner.entry(day: "2026-11-10", minute: 360).isEmpty && planner.days.count == 1, "blank entry not removed")
+        planner.setEntry(day: "2026-11-10", minute: 1380, text: "\t")
         try expect(planner.days.isEmpty, "empty day not removed")
         var gregorian = Calendar(identifier: .gregorian)
         gregorian.timeZone = TimeZone(identifier: "Asia/Seoul")!
@@ -272,9 +272,9 @@ private func run() async -> Int {
         var buddhist = Calendar(identifier: .buddhist)
         buddhist.timeZone = gregorian.timeZone
         try expect(PlannerState.dayKey(for: date, calendar: buddhist) == "2026-11-10", "day key used non-Gregorian year")
-        let encoded = try JSONEncoder().encode(PlannerState(days: ["2026-11-10": [6: "early", 23: "late"]]))
+        let encoded = try JSONEncoder().encode(PlannerState(days: ["2026-11-10": [360: "early", 1380: "late"]]))
         let decoded = try JSONDecoder().decode(PlannerState.self, from: encoded)
-        try expect(decoded.days["2026-11-10"] == [6: "early", 23: "late"], "integer-hour JSON round trip")
+        try expect(decoded.days["2026-11-10"] == [360: "early", 1380: "late"], "integer-minute JSON round trip")
     })
 
     record(await check("todo ordering and edits") {
@@ -307,16 +307,16 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let store = PlanStore(paths: paths, autosaveDelay: 0.15)
         let plannerFile = paths.root.appendingPathComponent("planner.json")
-        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "first") }
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", minute: 360, text: "first") }
         try await Task.sleep(for: .milliseconds(75))
-        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "second") }
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", minute: 360, text: "second") }
         try await Task.sleep(for: .milliseconds(90))
         try expect(!FileManager.default.fileExists(atPath: plannerFile.path), "planner saved before debounce ended")
         store.updateTodos { _ = $0.add(title: "task") }
         try await Task.sleep(for: .milliseconds(120))
         try expect(store.flush().isEmpty, "PlanStore flush failed")
         let restored = PlanStore(paths: paths)
-        try expect(restored.planner.entry(day: "2026-11-10", hour: 6) == "second", "planner did not round trip")
+        try expect(restored.planner.entry(day: "2026-11-10", minute: 360) == "second", "planner did not round trip")
         try expect(restored.todos.items.map(\.title) == ["task"], "todos did not round trip")
     })
 
@@ -324,11 +324,11 @@ private func run() async -> Int {
         let paths = try temporaryPaths()
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: paths.root.path); try? FileManager.default.removeItem(at: paths.root) }
         let store = PlanStore(paths: paths, autosaveDelay: 0.05)
-        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "old") }
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", minute: 360, text: "old") }
         try expect(store.flush().isEmpty, "initial planner save failed")
         let oldBytes = try Data(contentsOf: paths.root.appendingPathComponent("planner.json"))
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: paths.root.path)
-        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "retry") }
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", minute: 360, text: "retry") }
         store.updateTodos { _ = $0.add(title: "retry") }
         try await Task.sleep(for: .milliseconds(120))
         try expect(Set(store.flush()) == Set(["planner.json", "todos.json"]), "failed file names not reported")
@@ -338,7 +338,7 @@ private func run() async -> Int {
         try await Task.sleep(for: .milliseconds(1200))
         try expect(store.flush().isEmpty, "retry remained pending")
         let restored = PlanStore(paths: paths)
-        try expect(restored.planner.entry(day: "2026-11-10", hour: 6) == "retry", "planner retry failed")
+        try expect(restored.planner.entry(day: "2026-11-10", minute: 360) == "retry", "planner retry failed")
         try expect(restored.todos.items.map(\.title) == ["retry"], "todo retry failed")
     })
 
@@ -352,7 +352,7 @@ private func run() async -> Int {
         try expect(recovered.planner.days.isEmpty, "corrupt planner not reset")
         let backups = try FileManager.default.contentsOfDirectory(atPath: paths.root.path)
         try expect(backups.contains(where: { $0.hasPrefix("planner.corrupt-") }), "corrupt planner not backed up")
-        recovered.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "new") }
+        recovered.updatePlanner { $0.setEntry(day: "2026-11-10", minute: 360, text: "new") }
         try expect(recovered.flush().isEmpty, "backed-up planner stayed blocked")
         try FileManager.default.createDirectory(at: todosFile, withIntermediateDirectories: false)
         let unreadable = PlanStore(paths: paths)
@@ -709,6 +709,105 @@ private func run() async -> Int {
         try expect(store.snapshot(for: tuesday).day?.entries.first?.subject == "화요일", "Tuesday overwritten")
         try expect(store.snapshot(for: monday).day?.entries.first?.subject == "월요일", "Monday lost")
         store.flush()
+    })
+
+    record(await check("planner slot range ignores non-slot values") {
+        try expect(PlannerState.slots.first == 360 && PlannerState.slots.last == 1430 && PlannerState.slots.count == 108, "slot range")
+        try expect(zip(PlannerState.slots, PlannerState.slots.dropFirst()).allSatisfy { $1 - $0 == 10 }, "slot spacing")
+        var planner = PlannerState()
+        for minute in [6, 350, 355, 365, 1431, 1440, -10] {
+            planner.setEntry(day: "2026-11-10", minute: minute, text: "ignored")
+        }
+        try expect(planner.days.isEmpty, "non-slot value stored")
+        planner.setEntry(day: "2026-11-10", minute: 1430, text: "last")
+        try expect(planner.entry(day: "2026-11-10", minute: 1430) == "last", "last slot rejected")
+        let injected = PlannerState(days: ["2026-11-10": [365: "stray"]])
+        try expect(injected.entry(day: "2026-11-10", minute: 365).isEmpty, "non-slot value read")
+    })
+
+    record(await check("planner converts legacy hour keys") {
+        let json = #"{"days":{"2026-11-10":{"6":"early","23":"late","370":"minutes"}}}"#
+        let decoded = try JSONDecoder().decode(PlannerState.self, from: Data(json.utf8))
+        try expect(decoded.entry(day: "2026-11-10", minute: 360) == "early", "06 not converted")
+        try expect(decoded.entry(day: "2026-11-10", minute: 1380) == "late", "23 not converted")
+        try expect(decoded.entry(day: "2026-11-10", minute: 370) == "minutes", "minute entry changed")
+        try expect(decoded.days["2026-11-10"]?[6] == nil && decoded.days["2026-11-10"]?[23] == nil, "hour key kept")
+        let again = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(decoded))
+        try expect(again == decoded, "conversion not stable across saves")
+    })
+
+    record(await check("planner legacy conflict keeps both texts") {
+        let json = #"{"days":{"2026-11-10":{"8":"from hour","480":"from minute","490":"taken"}}}"#
+        let decoded = try JSONDecoder().decode(PlannerState.self, from: Data(json.utf8))
+        try expect(decoded.entry(day: "2026-11-10", minute: 480) == "from minute", "minute value replaced")
+        try expect(decoded.entry(day: "2026-11-10", minute: 490) == "taken", "neighbor replaced")
+        try expect(decoded.entry(day: "2026-11-10", minute: 500) == "from hour", "hour text lost")
+
+        var full: [String: String] = Dictionary(uniqueKeysWithValues: PlannerState.slots.map { (String($0), "x\($0)") })
+        full["6"] = "last resort"
+        let fullData = try JSONEncoder().encode(["days": ["2026-11-10": full]])
+        let filled = try JSONDecoder().decode(PlannerState.self, from: fullData)
+        try expect(filled.entry(day: "2026-11-10", minute: 360) == "x360 / last resort", "hour text lost on a full day")
+    })
+
+    record(await check("planner legacy file is rewritten in the new format") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let file = paths.root.appendingPathComponent("planner.json")
+        try Data(#"{"days":{"2026-11-10":{"7":"legacy"}}}"#.utf8).write(to: file)
+        let store = PlanStore(paths: paths, autosaveDelay: 0)
+        try expect(store.planner.entry(day: "2026-11-10", minute: 420) == "legacy", "legacy entry not loaded")
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", minute: 430, text: "new") }
+        try expect(store.flush().isEmpty, "save failed")
+        let saved = try JSONDecoder().decode([String: [String: [String: String]]].self, from: Data(contentsOf: file))
+        try expect(saved["days"]?["2026-11-10"] == ["420": "legacy", "430": "new"], "file not in the new format")
+    })
+
+    record(await check("school bell maps periods to start times") {
+        let expected = [1: 520, 2: 580, 3: 640, 4: 700, 5: 810, 6: 870, 7: 930, 8: 980]
+        try expect(SchoolBell.startMinutes == expected, "bell table")
+        try expect(SchoolBell.classLength == 50, "class length")
+        for (period, start) in expected {
+            let day = TimetableDay(entries: [TimetableEntry(period: period, subject: "수업")])
+            try expect(SchoolBell.lesson(atSlot: start, in: day)?.entry.period == period, "period \(period) start")
+        }
+    })
+
+    record(await check("school bell leaves lunch before fifth period") {
+        let day = TimetableDay(entries: [
+            TimetableEntry(period: 4, subject: "넷째"),
+            TimetableEntry(period: 5, subject: "다섯째"),
+        ])
+        try expect(SchoolBell.lesson(atSlot: 740, in: day)?.entry.period == 4, "fourth period end")
+        for minute in stride(from: 750, through: 800, by: 10) {
+            try expect(SchoolBell.lesson(atSlot: minute, in: day) == nil, "class during lunch at \(minute)")
+        }
+        try expect(SchoolBell.lesson(atSlot: 810, in: day) == SlotLesson(entry: day.entries[1], startMinute: 810, isFirstSlot: true), "13:30 start")
+    })
+
+    record(await check("school bell distinguishes the first slot") {
+        let entry = TimetableEntry(period: 1, subject: "공통수학2")
+        let day = TimetableDay(entries: [entry])
+        try expect(SchoolBell.lesson(atSlot: 510, in: day) == nil, "class before the bell")
+        try expect(SchoolBell.lesson(atSlot: 520, in: day)?.isFirstSlot == true, "first slot")
+        for minute in [530, 540, 550, 560] {
+            try expect(SchoolBell.lesson(atSlot: minute, in: day) == SlotLesson(entry: entry, startMinute: 520, isFirstSlot: false), "later slot \(minute)")
+        }
+        try expect(SchoolBell.lesson(atSlot: 570, in: day) == nil, "class past 50 minutes")
+        try expect(PlannerState.slots.filter { SchoolBell.lesson(atSlot: $0, in: day) != nil }.count == 5, "slot count")
+        try expect(SchoolBell.lesson(atSlot: 525, in: day) == nil, "non-slot minute matched")
+    })
+
+    record(await check("school bell handles eighth and unknown periods") {
+        let seventh = TimetableEntry(period: 7, subject: "일곱째")
+        let eighth = TimetableEntry(period: 8, subject: "여덟째")
+        let day = TimetableDay(entries: [seventh, eighth, TimetableEntry(period: 9, subject: "미지"), TimetableEntry(period: 0, subject: "영교시")])
+        try expect(SchoolBell.lesson(atSlot: 970, in: day)?.entry == seventh, "seventh period end")
+        try expect(SchoolBell.lesson(atSlot: 980, in: day) == SlotLesson(entry: eighth, startMinute: 980, isFirstSlot: true), "eighth period start")
+        try expect(SchoolBell.lesson(atSlot: 1020, in: day)?.entry == eighth, "eighth period end")
+        try expect(SchoolBell.lesson(atSlot: 1030, in: day) == nil, "eighth period overran")
+        let unknown = TimetableDay(entries: [TimetableEntry(period: 9, subject: "미지")])
+        try expect(PlannerState.slots.allSatisfy { SchoolBell.lesson(atSlot: $0, in: unknown) == nil }, "unknown period placed")
     })
 
     print("\(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")")

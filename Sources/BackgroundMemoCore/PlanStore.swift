@@ -3,12 +3,47 @@ import os
 
 // CONTRACT: signatures are fixed. Bodies are implemented by the core workstream.
 
-/// Planner entries by day ("yyyy-MM-dd") then hour (6...23). Blank entries are not stored.
+/// Planner entries by day ("yyyy-MM-dd") then minutes from midnight. Blank entries are not stored.
 public struct PlannerState: Codable, Equatable, Sendable {
     public var days: [String: [Int: String]]
     public init(days: [String: [Int: String]] = [:]) { self.days = days }
 
-    public static let hours = 6...23
+    /// Every 10 minutes from 06:00 through 23:50.
+    public static let slots = Array(stride(from: 360, through: 1430, by: 10))
+
+    public static func isSlot(_ minute: Int) -> Bool {
+        (360...1430).contains(minute) && minute % 10 == 0
+    }
+
+    /// Keys in this range are hours from files written before 10-minute slots.
+    private static let legacyHours = 6...23
+
+    private enum CodingKeys: String, CodingKey { case days }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        days = try container.decode([String: [Int: String]].self, forKey: .days).mapValues(Self.migratingLegacyHours)
+    }
+
+    /// Hour keys become their on-the-hour slot. A minute entry already there stays, and the
+    /// hour's text moves to the next free slot, so nothing the user wrote is lost.
+    private static func migratingLegacyHours(_ entries: [Int: String]) -> [Int: String] {
+        var migrated = entries.filter { !legacyHours.contains($0.key) }
+        for (hour, text) in entries.filter({ legacyHours.contains($0.key) }).sorted(by: { $0.key < $1.key }) {
+            let slot = hour * 60
+            guard let occupant = migrated[slot] else {
+                migrated[slot] = text
+                continue
+            }
+            let laterFirst = slots.filter { $0 > slot } + slots.filter { $0 < slot }
+            if let free = laterFirst.first(where: { migrated[$0] == nil }) {
+                migrated[free] = text
+            } else {
+                migrated[slot] = "\(occupant) / \(text)"
+            }
+        }
+        return migrated
+    }
 
     /// Local-calendar key, "yyyy-MM-dd" with Gregorian digits regardless of the user's locale.
     public static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
@@ -22,17 +57,20 @@ public struct PlannerState: Codable, Equatable, Sendable {
         return "\(padded(parts.year ?? 0, width: 4))-\(padded(parts.month ?? 0, width: 2))-\(padded(parts.day ?? 0, width: 2))"
     }
 
-    public func entry(day: String, hour: Int) -> String { days[day]?[hour] ?? "" }
+    public func entry(day: String, minute: Int) -> String {
+        guard Self.isSlot(minute) else { return "" }
+        return days[day]?[minute] ?? ""
+    }
 
     /// Stores the text. Whitespace-only text removes the entry, and a day left empty is removed.
-    /// Hours outside `hours` are ignored.
-    public mutating func setEntry(day: String, hour: Int, text: String) {
-        guard Self.hours.contains(hour) else { return }
+    /// Values that are not slots are ignored.
+    public mutating func setEntry(day: String, minute: Int, text: String) {
+        guard Self.isSlot(minute) else { return }
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            days[day]?[hour] = nil
+            days[day]?[minute] = nil
             if days[day]?.isEmpty == true { days[day] = nil }
         } else {
-            days[day, default: [:]][hour] = text
+            days[day, default: [:]][minute] = text
         }
     }
 }
