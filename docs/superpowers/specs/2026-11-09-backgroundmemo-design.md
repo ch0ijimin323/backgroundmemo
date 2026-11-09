@@ -21,7 +21,7 @@ Success means the author can keep it on the desktop every day: it stays behind o
 | Layout | Tabs contain splits (iTerm2 model), one tab bar |
 | Formatting | Native Font menu, color panel, and shortcuts; pasted images |
 | Storage | RTFD, one document per split pane |
-| Launch | Starts at login; keeps its Dock icon because the Font menu needs the menu bar |
+| Launch | Start at login is an opt-in app menu setting; keeps its Dock icon because the Font menu needs the menu bar |
 
 ## Out of scope for v1
 
