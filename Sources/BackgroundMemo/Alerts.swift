@@ -58,7 +58,7 @@ enum Alerts {
     static func askForNEISKey(hasSavedKey: Bool) -> NEISKeyEntryResult {
         let alert = makeAlert(
             message: "NEIS 인증키",
-            information: "인증키는 이 Mac의 키체인에만 저장됩니다. 인증키가 있으면 하루의 시간표를 모두 불러옵니다."
+            information: "인증키는 이 Mac의 앱 데이터 폴더에 본인만 읽을 수 있는 파일로 저장됩니다. 인증키가 있으면 하루의 시간표를 모두 불러옵니다."
         )
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         field.placeholderString = hasSavedKey ? "저장된 인증키가 있습니다" : "인증키"
@@ -79,8 +79,8 @@ enum Alerts {
         }
     }
 
-    static func showKeychainFailed(status: OSStatus) {
-        show(message: "인증키를 변경하지 못했습니다", information: "키체인 오류 코드: \(status)")
+    static func showKeyStoreFailed() {
+        show(message: "인증키를 변경하지 못했습니다", information: "앱 데이터 폴더에 인증키를 저장하거나 지울 수 없습니다.")
     }
 
     private static func show(message: String, information: String) {

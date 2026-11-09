@@ -105,11 +105,9 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
             case .cancel:
                 break
             }
-        } catch let error as KeychainError {
-            log.error("Keychain write failed with status \(error.status, privacy: .public)")
-            Alerts.showKeychainFailed(status: error.status)
         } catch {
-            log.error("Keychain write failed")
+            log.error("NEIS key file update failed")
+            Alerts.showKeyStoreFailed()
         }
     }
 

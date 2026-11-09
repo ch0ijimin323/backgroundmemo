@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let paths = AppPaths.standard()
-        let neisKeyStore = NEISKeyStore()
+        let neisKeyStore = NEISKeyStore(paths: paths)
         let controller = WorkspaceController(
             workspaceStore: WorkspaceStore(paths: paths),
             documentStore: DocumentStore(paths: paths),
