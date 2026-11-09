@@ -810,6 +810,129 @@ private func run() async -> Int {
         try expect(PlannerState.slots.allSatisfy { SchoolBell.lesson(atSlot: $0, in: unknown) == nil }, "unknown period placed")
     })
 
+    record(await check("planner span round trip") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", minute: 980, text: "자습")
+        planner.setSpan(day: "2026-11-10", minute: 980, slots: 6)
+        try expect(planner.spans["2026-11-10"] == [980: 6], "span not stored")
+        let decoded = try JSONDecoder().decode(PlannerState.self, from: JSONEncoder().encode(planner))
+        try expect(decoded == planner, "span did not round trip")
+
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let store = PlanStore(paths: paths, autosaveDelay: 0)
+        store.updatePlanner {
+            $0.setEntry(day: "2026-11-10", minute: 980, text: "자습")
+            $0.setSpan(day: "2026-11-10", minute: 980, slots: 3)
+        }
+        try expect(store.flush().isEmpty, "span save failed")
+        let restored = PlanStore(paths: paths, autosaveDelay: 0)
+        try expect(restored.planner.span(day: "2026-11-10", atSlot: 1000)?.isEnd == true, "span not restored from file")
+    })
+
+    record(await check("planner files without spans still decode") {
+        let json = #"{"days":{"2026-11-10":{"8":"legacy","490":"minutes"}}}"#
+        let decoded = try JSONDecoder().decode(PlannerState.self, from: Data(json.utf8))
+        try expect(decoded.spans.isEmpty, "spans invented")
+        try expect(decoded.entry(day: "2026-11-10", minute: 480) == "legacy", "legacy conversion lost")
+        try expect(decoded.entry(day: "2026-11-10", minute: 490) == "minutes", "minute entry lost")
+    })
+
+    record(await check("planner stored spans cannot hide text") {
+        let json = #"{"days":{"2026-11-10":{"480":"a","500":"b"}},"spans":{"2026-11-10":{"480":9,"490":3,"700":4}}}"#
+        let decoded = try JSONDecoder().decode(PlannerState.self, from: Data(json.utf8))
+        try expect(decoded.spans["2026-11-10"] == [480: 2], "invalid stored span kept")
+        try expect(decoded.span(day: "2026-11-10", atSlot: 500) == nil, "stored span covered text")
+    })
+
+    record(await check("planner span stops before the next text") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", minute: 600, text: "first")
+        planner.setEntry(day: "2026-11-10", minute: 640, text: "second")
+        planner.setSpan(day: "2026-11-10", minute: 600, slots: 20)
+        try expect(planner.spans["2026-11-10"] == [600: 4], "span crossed next text")
+        try expect(planner.entry(day: "2026-11-10", minute: 640) == "second", "next text changed")
+        try expect(planner.span(day: "2026-11-10", atSlot: 640) == nil, "next text covered")
+        planner.setEntry(day: "2026-11-10", minute: 610, text: "hidden")
+        planner.setEntry(day: "2026-11-10", minute: 650, text: "third")
+        planner.setSpan(day: "2026-11-10", minute: 640, slots: 2)
+        try expect(planner.spans["2026-11-10"]?[640] == nil, "span with no room stored")
+    })
+
+    record(await check("planner span stops at 23:50") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", minute: 1410, text: "late")
+        planner.setSpan(day: "2026-11-10", minute: 1410, slots: 50)
+        try expect(planner.spans["2026-11-10"] == [1410: 3], "span passed 23:50")
+        try expect(planner.span(day: "2026-11-10", atSlot: 1430)?.isEnd == true, "23:50 not the end")
+        planner.setEntry(day: "2026-11-10", minute: 1430, text: "ignored because covered")
+        try expect(planner.entry(day: "2026-11-10", minute: 1430).isEmpty, "covered 23:50 written")
+        var last = PlannerState()
+        last.setEntry(day: "2026-11-10", minute: 1430, text: "last")
+        last.setSpan(day: "2026-11-10", minute: 1430, slots: 2)
+        try expect(last.spans.isEmpty, "span from the final slot stored")
+    })
+
+    record(await check("planner span of one slot or fewer is removed") {
+        for count in [1, 0, -3] {
+            var planner = PlannerState()
+            planner.setEntry(day: "2026-11-10", minute: 600, text: "x")
+            planner.setSpan(day: "2026-11-10", minute: 600, slots: 3)
+            planner.setSpan(day: "2026-11-10", minute: 600, slots: count)
+            try expect(planner.spans.isEmpty, "span kept for count \(count)")
+            try expect(planner.entry(day: "2026-11-10", minute: 600) == "x", "text changed")
+        }
+    })
+
+    record(await check("planner span needs text on its start slot") {
+        var planner = PlannerState()
+        planner.setSpan(day: "2026-11-10", minute: 600, slots: 3)
+        try expect(planner.spans.isEmpty, "span on an empty slot")
+        planner.setEntry(day: "2026-11-10", minute: 600, text: "x")
+        planner.setSpan(day: "2026-11-10", minute: 605, slots: 3)
+        planner.setSpan(day: "2026-11-10", minute: 620, slots: 3)
+        try expect(planner.spans.isEmpty, "span on a non-slot or empty slot")
+    })
+
+    record(await check("planner clearing text removes its span") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", minute: 600, text: "x")
+        planner.setSpan(day: "2026-11-10", minute: 600, slots: 3)
+        planner.setEntry(day: "2026-11-10", minute: 600, text: "  ")
+        try expect(planner.spans.isEmpty && planner.days.isEmpty, "span outlived its text")
+        try expect(planner.span(day: "2026-11-10", atSlot: 610) == nil, "slot still covered")
+        planner.setEntry(day: "2026-11-10", minute: 610, text: "freed")
+        try expect(planner.entry(day: "2026-11-10", minute: 610) == "freed", "freed slot not writable")
+    })
+
+    record(await check("planner ignores writes to covered slots") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", minute: 600, text: "start")
+        planner.setSpan(day: "2026-11-10", minute: 600, slots: 3)
+        planner.setEntry(day: "2026-11-10", minute: 610, text: "covered")
+        planner.setEntry(day: "2026-11-10", minute: 620, text: "")
+        try expect(planner.entry(day: "2026-11-10", minute: 610).isEmpty, "covered slot written")
+        try expect(planner.spans["2026-11-10"] == [600: 3], "covered write changed the span")
+        planner.setEntry(day: "2026-11-10", minute: 600, text: "edited")
+        try expect(planner.entry(day: "2026-11-10", minute: 600) == "edited", "span start not editable")
+        try expect(planner.spans["2026-11-10"] == [600: 3], "editing the start changed the span")
+        planner.setSpan(day: "2026-11-10", minute: 610, slots: 2)
+        try expect(planner.spans["2026-11-10"] == [600: 3], "span started inside a span")
+    })
+
+    record(await check("planner span membership") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", minute: 980, text: "자습")
+        planner.setSpan(day: "2026-11-10", minute: 980, slots: 3)
+        try expect(planner.span(day: "2026-11-10", atSlot: 970) == nil, "before the span")
+        try expect(planner.span(day: "2026-11-10", atSlot: 980) == PlannerSpanMembership(startMinute: 980, isStart: true, isEnd: false), "start")
+        try expect(planner.span(day: "2026-11-10", atSlot: 990) == PlannerSpanMembership(startMinute: 980, isStart: false, isEnd: false), "middle")
+        try expect(planner.span(day: "2026-11-10", atSlot: 1000) == PlannerSpanMembership(startMinute: 980, isStart: false, isEnd: true), "end")
+        try expect(planner.span(day: "2026-11-10", atSlot: 1010) == nil, "after the span")
+        try expect(planner.span(day: "2026-11-10", atSlot: 985) == nil, "non-slot minute")
+        try expect(planner.span(day: "2026-11-11", atSlot: 980) == nil, "another day")
+    })
+
     print("\(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")")
     return failures
 }

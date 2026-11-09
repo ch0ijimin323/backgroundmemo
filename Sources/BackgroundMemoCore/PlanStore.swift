@@ -3,10 +3,28 @@ import os
 
 // CONTRACT: signatures are fixed. Bodies are implemented by the core workstream.
 
+/// Where a slot sits inside a span.
+public struct PlannerSpanMembership: Equatable, Sendable {
+    public var startMinute: Int
+    public var isStart: Bool
+    public var isEnd: Bool
+    public init(startMinute: Int, isStart: Bool, isEnd: Bool) {
+        self.startMinute = startMinute
+        self.isStart = isStart
+        self.isEnd = isEnd
+    }
+}
+
 /// Planner entries by day ("yyyy-MM-dd") then minutes from midnight. Blank entries are not stored.
 public struct PlannerState: Codable, Equatable, Sendable {
     public var days: [String: [Int: String]]
-    public init(days: [String: [Int: String]] = [:]) { self.days = days }
+    /// Multi-slot spans by day, then start minute, then slot count (2 or more).
+    /// A span starts on a slot with text and never covers another slot with text.
+    public var spans: [String: [Int: Int]]
+    public init(days: [String: [Int: String]] = [:], spans: [String: [Int: Int]] = [:]) {
+        self.days = days
+        self.spans = spans
+    }
 
     /// Every 10 minutes from 06:00 through 23:50.
     public static let slots = Array(stride(from: 360, through: 1430, by: 10))
@@ -18,11 +36,19 @@ public struct PlannerState: Codable, Equatable, Sendable {
     /// Keys in this range are hours from files written before 10-minute slots.
     private static let legacyHours = 6...23
 
-    private enum CodingKeys: String, CodingKey { case days }
+    private enum CodingKeys: String, CodingKey { case days, spans }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         days = try container.decode([String: [Int: String]].self, forKey: .days).mapValues(Self.migratingLegacyHours)
+        spans = [:]
+        // Applied through setSpan so a damaged file cannot hide the user's text behind a span.
+        let stored = try container.decodeIfPresent([String: [Int: Int]].self, forKey: .spans) ?? [:]
+        for (day, entries) in stored {
+            for (minute, count) in entries.sorted(by: { $0.key < $1.key }) {
+                setSpan(day: day, minute: minute, slots: count)
+            }
+        }
     }
 
     /// Hour keys become their on-the-hour slot. A minute entry already there stays, and the
@@ -62,16 +88,56 @@ public struct PlannerState: Codable, Equatable, Sendable {
         return days[day]?[minute] ?? ""
     }
 
-    /// Stores the text. Whitespace-only text removes the entry, and a day left empty is removed.
-    /// Values that are not slots are ignored.
+    /// Stores the text. Whitespace-only text removes the entry and any span starting there,
+    /// and a day left empty is removed. Values that are not slots, and slots covered by a span, are ignored.
     public mutating func setEntry(day: String, minute: Int, text: String) {
         guard Self.isSlot(minute) else { return }
+        if let membership = span(day: day, atSlot: minute), !membership.isStart { return }
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             days[day]?[minute] = nil
             if days[day]?.isEmpty == true { days[day] = nil }
+            removeSpan(day: day, minute: minute)
         } else {
             days[day, default: [:]][minute] = text
         }
+    }
+
+    /// The longest span starting at `minute`: up to just before the next slot with text, and through 23:50.
+    public func maximumSpanSlots(day: String, minute: Int) -> Int {
+        guard Self.isSlot(minute) else { return 0 }
+        let end = Self.slots.first { $0 > minute && hasText(day: day, minute: $0) } ?? 1440
+        return (end - minute) / 10
+    }
+
+    /// Sets the span starting on a slot with text, shortened to `maximumSpanSlots`.
+    /// One slot or fewer removes it. Other slots, including ones inside another span, are ignored.
+    public mutating func setSpan(day: String, minute: Int, slots count: Int) {
+        guard Self.isSlot(minute), hasText(day: day, minute: minute) else { return }
+        if let membership = span(day: day, atSlot: minute), !membership.isStart { return }
+        let length = min(count, maximumSpanSlots(day: day, minute: minute))
+        if length <= 1 {
+            removeSpan(day: day, minute: minute)
+        } else {
+            spans[day, default: [:]][minute] = length
+        }
+    }
+
+    /// The span covering `minute`, if any.
+    public func span(day: String, atSlot minute: Int) -> PlannerSpanMembership? {
+        guard Self.isSlot(minute), let entries = spans[day] else { return nil }
+        for (start, count) in entries where minute >= start && minute < start + count * 10 {
+            return PlannerSpanMembership(startMinute: start, isStart: minute == start, isEnd: minute == start + (count - 1) * 10)
+        }
+        return nil
+    }
+
+    private func hasText(day: String, minute: Int) -> Bool {
+        !entry(day: day, minute: minute).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private mutating func removeSpan(day: String, minute: Int) {
+        spans[day]?[minute] = nil
+        if spans[day]?.isEmpty == true { spans[day] = nil }
     }
 }
 
