@@ -98,3 +98,11 @@ Two fixed tabs sit in the tab bar alongside memo tabs: `계획` and `할 일`. E
 - **Planner.** A date header with previous, next, and today controls above one editable row per hour from 06:00 to 23:00. It opens on today and follows the date across midnight when today is showing.
 - **To-do.** One list independent of dates. Enter adds, a checkbox completes, completed items sink below open items, and items can be edited and deleted.
 - **Storage.** `planner.json` and `todos.json` beside `workspace.json`, using atomic debounced saves. Failures retry and are reported at quit, as for documents. A corrupt file is kept as a backup. An unreadable file is never overwritten.
+
+## School timetable
+
+The planner shows one class's timetable between the date header and the hour rows. It uses the official NEIS Open API (`hisTimetable`). 컴시간 is not used because it has no official API and its data calls are encrypted.
+
+- **Requests.** One day at a time, never on weekends, and at most one successful fetch per day per session. Without an API key the request asks for 5 rows; it never pages or splits requests to get around that limit, and a day with more classes shows as partial. A key is stored in the macOS Keychain and is never logged or written to a file.
+- **Storage.** `timetable.json` beside `workspace.json`. Failed fetches never replace the cache. Cache save failures are logged and do not block quitting, because the data can be fetched again.
+- **Display.** Read-only and separate from the planner's entries, which it never changes.

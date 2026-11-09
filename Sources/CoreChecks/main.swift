@@ -529,6 +529,163 @@ private func run() async -> Int {
         }
     })
 
+    record(await check("timetable parses a normal response") {
+        let day = try NEISTimetable.parse(Data(timetableJSON(total: 2, rows: [("1", "공통수학2"), ("2", "영어")]).utf8), ymd: "20261109")
+        try expect(day.entries == [TimetableEntry(period: 1, subject: "공통수학2"), TimetableEntry(period: 2, subject: "영어")], "entries")
+        try expect(!day.isPartial, "complete response marked partial")
+        let otherDay = try NEISTimetable.parse(Data(timetableJSON(total: 1, rows: [("1", "국어")], ymd: "20261110").utf8), ymd: "20261109")
+        try expect(otherDay.entries.isEmpty, "row from another date accepted")
+    })
+
+    record(await check("timetable sorts and removes duplicate periods") {
+        let rows = [("3", "과학"), ("1", "국어"), ("3", "중복"), ("2", "영어"), ("1", "중복")]
+        let day = try NEISTimetable.parse(Data(timetableJSON(total: 5, rows: rows).utf8))
+        try expect(day.entries.map(\.period) == [1, 2, 3], "period order")
+        try expect(day.entries.map(\.subject) == ["국어", "영어", "과학"], "first subject per period")
+        try expect(!day.isPartial, "duplicates counted as partial")
+    })
+
+    record(await check("timetable marks partial responses") {
+        let day = try NEISTimetable.parse(Data(timetableJSON(total: 7, rows: [("1", "국어"), ("2", "영어")]).utf8))
+        try expect(day.isPartial && day.entries.count == 2, "partial flag")
+    })
+
+    record(await check("timetable INFO-200 means no classes") {
+        let day = try NEISTimetable.parse(Data(#"{"RESULT":{"CODE":"INFO-200","MESSAGE":"none"}}"#.utf8))
+        try expect(day == TimetableDay(), "not an empty day")
+    })
+
+    record(await check("timetable ERROR responses fail") {
+        let top = Data(#"{"RESULT":{"CODE":"ERROR-300","MESSAGE":"bad"}}"#.utf8)
+        try expect(parseError(top) == .api(code: "ERROR-300"), "top-level error")
+        let badKey = Data(#"{"RESULT":{"CODE":"INFO-300","MESSAGE":"bad"}}"#.utf8)
+        try expect(parseError(badKey) == .api(code: "INFO-300"), "non-200 INFO code")
+        let head = Data(#"{"hisTimetable":[{"head":[{"list_total_count":1},{"RESULT":{"CODE":"ERROR-500"}}]}]}"#.utf8)
+        try expect(parseError(head) == .api(code: "ERROR-500"), "head error")
+    })
+
+    record(await check("timetable broken JSON fails") {
+        try expect(parseError(Data("{broken".utf8)) == .malformedResponse, "broken JSON")
+        try expect(parseError(Data("[]".utf8)) == .malformedResponse, "wrong root")
+        try expect(parseError(Data(#"{"hisTimetable":[{"head":[{"RESULT":{"CODE":"INFO-000"}}]}]}"#.utf8)) == .malformedResponse, "missing rows")
+        let badPeriod = timetableJSON(total: 1, rows: [("첫째", "국어")])
+        try expect(parseError(Data(badPeriod.utf8)) == .malformedResponse, "bad period")
+    })
+
+    record(await check("timetable request stays within the keyless limit") {
+        let keyless = try require(NEISTimetable.requestURL(dayKey: "2026-11-09", apiKey: nil), "no URL")
+        let query = queryItems(keyless)
+        try expect(query["pSize"] == "5" && query["pIndex"] == "1" && query["KEY"] == nil, "keyless query")
+        try expect(query["TI_FROM_YMD"] == "20261109" && query["TI_TO_YMD"] == "20261109", "single day")
+        try expect(query["ATPT_OFCDC_SC_CODE"] == "G10" && query["SD_SCHUL_CODE"] == "7430310", "school")
+        try expect(query["GRADE"] == "1" && query["CLASS_NM"] == "1", "class")
+        let keyed = queryItems(try require(NEISTimetable.requestURL(dayKey: "2026-11-09", apiKey: "abc"), "no URL"))
+        try expect(keyed["pSize"] == "30" && keyed["pIndex"] == "1" && keyed["KEY"] == "abc", "keyed query")
+        try expect(queryItems(try require(NEISTimetable.requestURL(dayKey: "2026-11-09", apiKey: "  "), "no URL"))["KEY"] == nil, "blank key used")
+    })
+
+    record(await check("timetable failures never overwrite the cache") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let date = try gregorianDate(2026, 11, 9)
+        let good = Data(timetableJSON(total: 1, rows: [("1", "국어")]).utf8)
+        let first = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: { _ in (good, 200) })
+        first.request(date: date)
+        try await waitUntilSettled(first, date)
+        first.flush()
+        let file = paths.root.appendingPathComponent("timetable.json")
+        try await waitForFile(file)
+        let saved = try Data(contentsOf: file)
+        let expected = TimetableDay(entries: [TimetableEntry(period: 1, subject: "국어")])
+
+        let failures: [TimetableTransport] = [
+            { _ in (Data("{broken".utf8), 200) },
+            { _ in (Data(#"{"RESULT":{"CODE":"ERROR-300"}}"#.utf8), 200) },
+            { _ in (good, 500) },
+            { _ in throw URLError(.notConnectedToInternet) },
+        ]
+        for transport in failures {
+            let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: transport)
+            store.request(date: date)
+            try await waitUntilSettled(store, date)
+            let snapshot = store.snapshot(for: date)
+            try expect(snapshot.status == .failed && snapshot.day == expected, "cache not shown after failure")
+            store.flush()
+            try await Task.sleep(for: .milliseconds(20))
+            try expect(try Data(contentsOf: file) == saved, "failure rewrote the cache")
+        }
+    })
+
+    record(await check("timetable fetches once per day and skips weekends") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let counter = RequestCounter()
+        let body = Data(timetableJSON(total: 1, rows: [("1", "국어")]).utf8)
+        let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: { _ in
+            counter.increment()
+            return (body, 200)
+        })
+        let monday = try gregorianDate(2026, 11, 9)
+        store.request(date: monday)
+        store.request(date: monday)
+        try await waitUntilSettled(store, monday)
+        store.request(date: monday)
+        try await Task.sleep(for: .milliseconds(20))
+        try expect(counter.count == 1, "fetched \(counter.count) times")
+        let saturday = try gregorianDate(2026, 11, 14)
+        store.request(date: saturday)
+        try await Task.sleep(for: .milliseconds(20))
+        try expect(counter.count == 1, "weekend fetched")
+        try expect(store.snapshot(for: saturday) == TimetableSnapshot(day: TimetableDay(), status: .loaded), "weekend snapshot")
+        store.flush()
+    })
+
+    record(await check("timetable refetches partial days after a new key") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let counter = RequestCounter()
+        let key = StringBox("")
+        let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { key.text.isEmpty ? nil : key.text }, transport: { url in
+            counter.increment()
+            let keyed = url.query?.contains("KEY=") == true
+            let rows = keyed ? [("1", "국어"), ("2", "영어")] : [("1", "국어")]
+            return (Data(timetableJSON(total: 2, rows: rows).utf8), 200)
+        })
+        let date = try gregorianDate(2026, 11, 9)
+        store.request(date: date)
+        try await waitUntilSettled(store, date)
+        try expect(store.snapshot(for: date).day?.isPartial == true, "keyless day not partial")
+        key.text = "abc"
+        store.apiKeyDidChange(refreshing: date)
+        try await waitUntilSettled(store, date)
+        try expect(counter.count == 2, "partial day not refetched")
+        try expect(store.snapshot(for: date).day?.isPartial == false, "keyed result not applied")
+        store.apiKeyDidChange(refreshing: date)
+        try await Task.sleep(for: .milliseconds(20))
+        try expect(counter.count == 2, "complete day refetched")
+        store.flush()
+    })
+
+    record(await check("timetable late response stays on its own day") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: { url in
+            let isMonday = url.query?.contains("TI_FROM_YMD=20261109") == true
+            if isMonday { try await Task.sleep(for: .milliseconds(60)) }
+            let rows = isMonday ? [("1", "월요일")] : [("1", "화요일")]
+            return (Data(timetableJSON(total: 1, rows: rows, ymd: isMonday ? "20261109" : "20261110").utf8), 200)
+        })
+        let monday = try gregorianDate(2026, 11, 9)
+        let tuesday = try gregorianDate(2026, 11, 10)
+        store.request(date: monday)
+        store.request(date: tuesday)
+        try await waitUntilSettled(store, tuesday)
+        try await waitUntilSettled(store, monday)
+        try expect(store.snapshot(for: tuesday).day?.entries.first?.subject == "화요일", "Tuesday overwritten")
+        try expect(store.snapshot(for: monday).day?.entries.first?.subject == "월요일", "Monday lost")
+        store.flush()
+    })
+
     print("\(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")")
     return failures
 }
@@ -536,6 +693,55 @@ private func run() async -> Int {
 private func require<T>(_ value: T?, _ message: String) throws -> T {
     guard let value else { throw CheckFailure(description: message) }
     return value
+}
+
+private func timetableJSON(total: Int, rows: [(String, String)], ymd: String = "20261109") -> String {
+    let body = rows.map { #"{"ALL_TI_YMD":"\#(ymd)","PERIO":"\#($0.0)","ITRT_CNTNT":"\#($0.1)"}"# }.joined(separator: ",")
+    return #"{"hisTimetable":[{"head":[{"list_total_count":\#(total)},{"RESULT":{"CODE":"INFO-000","MESSAGE":"ok"}}]},{"row":[\#(body)]}]}"#
+}
+
+private func parseError(_ data: Data) -> TimetableError? {
+    do {
+        _ = try NEISTimetable.parse(data)
+        return nil
+    } catch {
+        return error as? TimetableError
+    }
+}
+
+private func queryItems(_ url: URL) -> [String: String] {
+    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    return Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+}
+
+private func gregorianDate(_ year: Int, _ month: Int, _ day: Int) throws -> Date {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = .current
+    return try require(calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12)), "invalid date")
+}
+
+@MainActor
+private func waitUntilSettled(_ store: TimetableStore, _ date: Date) async throws {
+    for _ in 0..<300 {
+        try await Task.sleep(for: .milliseconds(10))
+        if store.snapshot(for: date).status != .loading { return }
+    }
+    throw CheckFailure(description: "timetable request did not finish")
+}
+
+private func waitForFile(_ file: URL) async throws {
+    for _ in 0..<300 {
+        if FileManager.default.fileExists(atPath: file.path) { return }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    throw CheckFailure(description: "timetable cache was not written")
+}
+
+private final class RequestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int { lock.withLock { value } }
+    func increment() { lock.withLock { value += 1 } }
 }
 
 private func memoDocumentIDs(_ state: WorkspaceState) -> Set<UUID> {

@@ -9,6 +9,8 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
     private let workspaceStore: WorkspaceStore
     private let documentStore: DocumentStore
     private let planStore: PlanStore
+    private let timetableStore: TimetableStore
+    private let neisKeyStore: NEISKeyStore
     private var state: WorkspaceState
 
     private let window: DesktopWindow
@@ -22,11 +24,19 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
     private var isRendering = false
     private var workspaceSaveTask: Task<Void, Never>?
 
-    init(workspaceStore: WorkspaceStore, documentStore: DocumentStore, planStore: PlanStore) {
+    init(
+        workspaceStore: WorkspaceStore,
+        documentStore: DocumentStore,
+        planStore: PlanStore,
+        timetableStore: TimetableStore,
+        neisKeyStore: NEISKeyStore
+    ) {
         self.workspaceStore = workspaceStore
         self.documentStore = documentStore
         self.planStore = planStore
-        plannerView = PlannerView(planStore: planStore)
+        self.timetableStore = timetableStore
+        self.neisKeyStore = neisKeyStore
+        plannerView = PlannerView(planStore: planStore, timetableStore: timetableStore)
         todoView = TodoView(planStore: planStore)
         let loaded = workspaceStore.load()
         state = loaded.state
@@ -67,6 +77,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         todoView.finishFieldEditing()
         workspaceSaveTask?.cancel()
         saveWorkspaceNow()
+        timetableStore.flush()
         return SaveFailures(documents: documentStore.flush(), planFiles: planStore.flush())
     }
 
@@ -81,6 +92,25 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
 
     @objc func newTab(_ sender: Any?) {
         mutate { $0.addTab() }
+    }
+
+    @objc func showNEISKeyEntry(_ sender: Any?) {
+        do {
+            switch Alerts.askForNEISKey(hasSavedKey: neisKeyStore.key != nil) {
+            case .save(let key):
+                try neisKeyStore.save(key)
+                plannerView.timetableKeyDidChange()
+            case .delete:
+                try neisKeyStore.delete()
+            case .cancel:
+                break
+            }
+        } catch let error as KeychainError {
+            log.error("Keychain write failed with status \(error.status, privacy: .public)")
+            Alerts.showKeychainFailed(status: error.status)
+        } catch {
+            log.error("Keychain write failed")
+        }
     }
 
     @objc func closeFocusedPane(_ sender: Any?) {

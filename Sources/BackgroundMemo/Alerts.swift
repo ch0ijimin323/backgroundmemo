@@ -21,6 +21,12 @@ struct SaveFailures {
     }
 }
 
+enum NEISKeyEntryResult {
+    case save(String)
+    case delete
+    case cancel
+}
+
 /// Modal alerts for failures the user has to know about.
 @MainActor
 enum Alerts {
@@ -47,6 +53,34 @@ enum Alerts {
         alert.addButton(withTitle: "취소")
         alert.addButton(withTitle: "그래도 종료")
         return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    static func askForNEISKey(hasSavedKey: Bool) -> NEISKeyEntryResult {
+        let alert = makeAlert(
+            message: "NEIS 인증키",
+            information: "인증키는 이 Mac의 키체인에만 저장됩니다. 인증키가 있으면 하루의 시간표를 모두 불러옵니다."
+        )
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.placeholderString = hasSavedKey ? "저장된 인증키가 있습니다" : "인증키"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: "저장")
+        alert.addButton(withTitle: "취소")
+        if hasSavedKey { alert.addButton(withTitle: "삭제") }
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return key.isEmpty ? .cancel : .save(key)
+        case .alertThirdButtonReturn:
+            return .delete
+        default:
+            return .cancel
+        }
+    }
+
+    static func showKeychainFailed(status: OSStatus) {
+        show(message: "인증키를 변경하지 못했습니다", information: "키체인 오류 코드: \(status)")
     }
 
     private static func show(message: String, information: String) {

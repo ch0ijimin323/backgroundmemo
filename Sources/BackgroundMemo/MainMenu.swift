@@ -39,6 +39,8 @@ enum MainMenu {
         let menu = NSMenu(title: "파일")
         menu.add("새 탭", #selector(WorkspaceController.newTab(_:)), key: "t", target: controller)
         menu.add("칸 닫기", #selector(WorkspaceController.closeFocusedPane(_:)), key: "w", target: controller)
+        menu.addItem(.separator())
+        menu.add("NEIS 인증키 입력…", #selector(WorkspaceController.showNEISKeyEntry(_:)), target: controller)
         return menu
     }
 

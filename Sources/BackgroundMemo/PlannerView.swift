@@ -7,6 +7,7 @@ final class PlannerView: NSView {
     private static let headerHeight: CGFloat = 36
 
     private let planStore: PlanStore
+    private let timetableStore: TimetableStore
     private let calendar = Calendar.current
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -20,6 +21,7 @@ final class PlannerView: NSView {
     private let nextButton = TabBarView.makeSymbolButton(symbol: "chevron.right", fallback: "›", label: "다음 날")
     private let todayButton = NSButton(title: "", target: nil, action: nil)
     private let dateLabel = NSTextField(labelWithString: "")
+    private let timetableStrip = TimetableStripView()
     private let document = FlippedView()
     private let scrollView: NSScrollView
     private var rows: [PlannerRow] = []
@@ -29,14 +31,18 @@ final class PlannerView: NSView {
     /// Midnight passed during a composition; the page turns once the composition ends.
     private var hasDeferredRollover = false
 
-    init(planStore: PlanStore) {
+    init(planStore: PlanStore, timetableStore: TimetableStore) {
         self.planStore = planStore
+        self.timetableStore = timetableStore
         scrollView = .glassScrollView(document: document)
         super.init(frame: .zero)
         appearance = NSAppearance(named: .darkAqua)
         buildHeader()
         buildRows()
+        addSubview(timetableStrip)
         addSubview(scrollView)
+        // Always renders the page's own date, so a late response for another day cannot appear.
+        timetableStore.onUpdate = { [weak self] in self?.refreshTimetable() }
         show(date: Date())
 
         NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
@@ -65,11 +71,13 @@ final class PlannerView: NSView {
         nextButton.frame = NSRect(x: dateLabel.frame.maxX + 6, y: middle, width: buttonSize, height: buttonSize)
         todayButton.frame = NSRect(x: bounds.width - 54, y: middle, width: 50, height: buttonSize)
 
+        let stripHeight = timetableStrip.preferredHeight(forWidth: bounds.width)
+        timetableStrip.frame = NSRect(x: 0, y: Self.headerHeight, width: bounds.width, height: stripHeight)
         scrollView.frame = NSRect(
             x: 0,
-            y: Self.headerHeight,
+            y: timetableStrip.frame.maxY,
             width: bounds.width,
-            height: max(0, bounds.height - Self.headerHeight)
+            height: max(0, bounds.height - timetableStrip.frame.maxY)
         )
         let width = scrollView.contentSize.width
         document.frame = NSRect(x: 0, y: 0, width: width, height: CGFloat(rows.count) * Self.rowHeight)
@@ -136,10 +144,23 @@ final class PlannerView: NSView {
         for row in rows {
             row.bind(day: day, text: planStore.planner.entry(day: day, hour: row.hour))
         }
+        timetableStore.request(date: displayedDate)
+        refreshTimetable()
         needsLayout = true
     }
 
+    private func refreshTimetable() {
+        timetableStrip.render(timetableStore.snapshot(for: displayedDate))
+        timetableStrip.needsLayout = true
+        needsLayout = true
+    }
+
+    func timetableKeyDidChange() {
+        timetableStore.apiKeyDidChange(refreshing: displayedDate)
+    }
+
     private func calendarDayDidChange() {
+        timetableStore.request(date: Date())
         guard isShowingToday else {
             // The page being viewed may have just become today.
             isShowingToday = PlannerState.dayKey(for: displayedDate) == PlannerState.dayKey(for: Date())

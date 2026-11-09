@@ -8,10 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let paths = AppPaths.standard()
+        let neisKeyStore = NEISKeyStore()
         let controller = WorkspaceController(
             workspaceStore: WorkspaceStore(paths: paths),
             documentStore: DocumentStore(paths: paths),
-            planStore: PlanStore(paths: paths)
+            planStore: PlanStore(paths: paths),
+            timetableStore: TimetableStore(paths: paths, apiKey: { neisKeyStore.key }),
+            neisKeyStore: neisKeyStore
         )
         self.controller = controller
         NSApp.mainMenu = MainMenu.make(controller: controller)

@@ -156,7 +156,7 @@ public final class PlanStore {
         return FileKind.allCases.filter { failed.contains($0) }.map(\.rawValue)
     }
 
-    private static func load<State: Decodable>(_ empty: State, from file: URL) -> (state: State, blocked: Bool) {
+    static func load<State: Decodable>(_ empty: State, from file: URL) -> (state: State, blocked: Bool) {
         let manager = FileManager.default
         guard manager.fileExists(atPath: file.path) else { return (empty, false) }
         let data: Data
