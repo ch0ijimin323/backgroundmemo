@@ -10,7 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let paths = AppPaths.standard()
         let controller = WorkspaceController(
             workspaceStore: WorkspaceStore(paths: paths),
-            documentStore: DocumentStore(paths: paths)
+            documentStore: DocumentStore(paths: paths),
+            planStore: PlanStore(paths: paths)
         )
         self.controller = controller
         NSApp.mainMenu = MainMenu.make(controller: controller)

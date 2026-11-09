@@ -1,5 +1,26 @@
 import AppKit
 
+/// What could not be written when saving everything.
+struct SaveFailures {
+    let documents: [UUID]
+    /// File names from `PlanStore.flush`.
+    let planFiles: [String]
+
+    var isEmpty: Bool { documents.isEmpty && planFiles.isEmpty }
+
+    var summary: String {
+        let memos = documents.isEmpty ? [] : ["메모 \(documents.count)개"]
+        let plans = planFiles.map { file in
+            switch file {
+            case "planner.json": "계획"
+            case "todos.json": "할 일"
+            default: file
+            }
+        }
+        return (memos + plans).joined(separator: ", ")
+    }
+}
+
 /// Modal alerts for failures the user has to know about.
 @MainActor
 enum Alerts {
@@ -17,10 +38,10 @@ enum Alerts {
         )
     }
 
-    /// Returns true when the user chooses to quit despite unsaved memos.
-    static func confirmQuitWithUnsavedDocuments(count: Int) -> Bool {
+    /// Returns true when the user chooses to quit despite unsaved changes.
+    static func confirmQuitWithUnsavedChanges(_ failures: SaveFailures) -> Bool {
         let alert = makeAlert(
-            message: "메모 \(count)개를 저장하지 못했습니다",
+            message: "다음 항목을 저장하지 못했습니다: \(failures.summary)",
             information: "지금 종료하면 저장되지 않은 변경 내용이 사라집니다."
         )
         alert.addButton(withTitle: "취소")

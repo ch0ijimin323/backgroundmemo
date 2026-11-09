@@ -14,7 +14,7 @@ final class SplitContainerView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func render(root: SplitNode, paneViews newPaneViews: [UUID: PaneView]) {
+    func render(root: SplitNode?, paneViews newPaneViews: [UUID: PaneView]) {
         self.root = root
 
         for (id, view) in paneViews where newPaneViews[id] !== view {
@@ -27,7 +27,7 @@ final class SplitContainerView: NSView {
         paneViews = newPaneViews
 
         var splits: [Split] = []
-        collectSplits(root, into: &splits)
+        if let root { collectSplits(root, into: &splits) }
         let liveIDs = Set(splits.map(\.id))
         for (id, divider) in dividers where !liveIDs.contains(id) {
             divider.removeFromSuperview()

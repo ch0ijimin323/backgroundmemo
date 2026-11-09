@@ -50,7 +50,7 @@ final class TabBarView: NSView {
         }
         buttons = tabs.map { tab in
             let button = existing[tab.id] ?? makeButton(tabID: tab.id)
-            button.update(title: tab.title, isSelected: tab.id == selectedID)
+            button.update(title: tab.title, isSelected: tab.id == selectedID, isFixed: tab.kind != .memo)
             return button
         }
         needsLayout = true
@@ -123,6 +123,7 @@ final class TabButton: NSView, NSTextFieldDelegate {
     private let closeButton = TabBarView.makeSymbolButton(symbol: "xmark", fallback: "×", label: "탭 닫기")
     private var title = ""
     private var isSelected = false
+    private var isFixed = false
     private var isHovering = false
     private var dragStartX: CGFloat?
     private var isReordering = false
@@ -159,7 +160,8 @@ final class TabButton: NSView, NSTextFieldDelegate {
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    func update(title: String, isSelected: Bool) {
+    func update(title: String, isSelected: Bool, isFixed: Bool) {
+        self.isFixed = isFixed
         self.title = title
         self.isSelected = isSelected
         // Writing the field while it is being edited would break Korean composition.
@@ -170,7 +172,7 @@ final class TabButton: NSView, NSTextFieldDelegate {
     private func refreshAppearance() {
         let alpha: CGFloat = isSelected ? 0.28 : (isHovering ? 0.14 : 0)
         layer?.backgroundColor = NSColor.white.withAlphaComponent(alpha).cgColor
-        closeButton.isHidden = isRenaming || !(isSelected || isHovering)
+        closeButton.isHidden = isFixed || isRenaming || !(isSelected || isHovering)
     }
 
     override func layout() {
@@ -210,7 +212,7 @@ final class TabButton: NSView, NSTextFieldDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
+        if event.clickCount == 2, !isFixed {
             dragStartX = nil
             beginRename()
             return
