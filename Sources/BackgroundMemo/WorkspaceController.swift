@@ -51,11 +51,20 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
         focusSelectedPane()
     }
 
-    func saveEverything() {
+    /// Writes the workspace and all pending memos. Returns the documents that failed to save.
+    @discardableResult
+    func saveEverything() -> [UUID] {
         if tabBar.isRenaming { focusSelectedPane() }
         workspaceSaveTask?.cancel()
         saveWorkspaceNow()
-        documentStore.flush()
+        return documentStore.flush()
+    }
+
+    /// Saves before quitting. Returns false when a memo failed to save and the user stays.
+    func confirmTermination() -> Bool {
+        let failedDocuments = saveEverything()
+        guard !failedDocuments.isEmpty else { return true }
+        return Alerts.confirmQuitWithUnsavedDocuments(count: failedDocuments.count)
     }
 
     // MARK: Menu actions
@@ -88,27 +97,55 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
     }
 
     private func closePane(id: UUID) {
-        var result = PaneCloseResult.notFound
-        mutate { result = $0.closePane(id: id) }
-        switch result {
-        case .closedPane(let documentID), .closedTab(let documentID), .replacedLastTab(let documentID):
-            trash(documentID)
-        case .notFound:
-            break
+        commitClose { state in
+            switch state.closePane(id: id) {
+            case .closedPane(let documentID), .closedTab(let documentID), .replacedLastTab(let documentID):
+                return [documentID]
+            case .notFound:
+                return []
+            }
         }
     }
 
     private func closeTab(id: UUID) {
-        var documentIDs: [UUID] = []
-        mutate { documentIDs = $0.closeTab(id: id) }
-        documentIDs.forEach(trash)
+        commitClose { $0.closeTab(id: id) }
     }
 
-    private func trash(_ documentID: UUID) {
+    /// Persists a close before trashing, so workspace.json never names a trashed document.
+    private func commitClose(_ change: (inout WorkspaceState) -> [UUID]) {
+        let previous = state
+        let documentIDs = change(&state)
+        guard state != previous else { return }
+
         do {
-            try documentStore.trash(id: documentID)
+            try workspaceStore.save(state)
         } catch {
-            log.error("Trash failed for \(documentID, privacy: .public): \(String(describing: error), privacy: .public)")
+            state = previous
+            log.error("Close not saved: \(String(describing: error), privacy: .public)")
+            Alerts.showWorkspaceSaveFailed(error)
+            return
+        }
+        workspaceSaveTask?.cancel()
+
+        // Rendering commits any IME text in the closed pane; trash then cancels that autosave.
+        render(focus: true)
+        trash(documentIDs)
+    }
+
+    private func trash(_ documentIDs: [UUID]) {
+        var failureCount = 0
+        var lastError: Error?
+        for documentID in documentIDs {
+            do {
+                try documentStore.trash(id: documentID)
+            } catch {
+                failureCount += 1
+                lastError = error
+                log.error("Trash failed for \(documentID, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+        }
+        if let lastError {
+            Alerts.showTrashFailed(count: failureCount, error: lastError)
         }
     }
 
