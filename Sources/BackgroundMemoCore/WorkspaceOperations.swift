@@ -98,6 +98,9 @@ extension WorkspaceState {
         tabs[index].focusedPaneID = panes[next].id
     }
 
+    /// Adds whichever fixed tabs are missing, and drops duplicate fixed tabs beyond the first.
+    public mutating func ensureFixedTabs() { fatalError("unimplemented") }
+
     /// Every document ID referenced by any tab.
     public var allDocumentIDs: Set<UUID> { Set(tabs.flatMap { $0.root.panes.map(\.documentID) }) }
 }

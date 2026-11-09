@@ -37,16 +37,39 @@ public indirect enum SplitNode: Codable, Equatable, Sendable {
     case split(Split)
 }
 
+public enum TabKind: String, Codable, Sendable {
+    case memo
+    /// Fixed tab holding the daily hour-by-hour planner. Exactly one exists.
+    case planner
+    /// Fixed tab holding the to-do list. Exactly one exists.
+    case todo
+}
+
 public struct Tab: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var title: String
+    /// Missing in files written before fixed tabs existed; decodes as `.memo`.
+    public var kind: TabKind
+    /// Fixed tabs keep a single placeholder pane whose document is never created.
     public var root: SplitNode
     public var focusedPaneID: UUID
-    public init(id: UUID = UUID(), title: String, root: SplitNode, focusedPaneID: UUID) {
+    public init(id: UUID = UUID(), title: String, kind: TabKind = .memo, root: SplitNode, focusedPaneID: UUID) {
         self.id = id
         self.title = title
+        self.kind = kind
         self.root = root
         self.focusedPaneID = focusedPaneID
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, title, kind, root, focusedPaneID }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        kind = try c.decodeIfPresent(TabKind.self, forKey: .kind) ?? .memo
+        root = try c.decode(SplitNode.self, forKey: .root)
+        focusedPaneID = try c.decode(UUID.self, forKey: .focusedPaneID)
     }
 }
 

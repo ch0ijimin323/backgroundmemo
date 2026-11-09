@@ -90,3 +90,11 @@ Work lands on branches and is pushed to the private GitHub repository `backgroun
 - Model: split, close, tab reorder, JSON round trip, corrupt JSON recovery.
 - Store: RTFD round trip with formatting and an image, atomic save, Trash on close, unreadable document preserved.
 - Manual: the prototype gate checks, relaunch restore, switching Spaces, Mission Control, display change.
+
+## Planner and to-do tabs
+
+Two fixed tabs sit in the tab bar alongside memo tabs: `계획` and `할 일`. Exactly one of each exists; they cannot be closed or split, but they can be reordered. Files saved before these tabs existed gain them on load, keeping existing memos.
+
+- **Planner.** A date header with previous, next, and today controls above one editable row per hour from 06:00 to 23:00. It opens on today and follows the date across midnight when today is showing.
+- **To-do.** One list independent of dates. Enter adds, a checkbox completes, completed items sink below open items, and items can be edited and deleted.
+- **Storage.** `planner.json` and `todos.json` beside `workspace.json`, using atomic debounced saves. Failures retry and are reported at quit, as for documents. A corrupt file is kept as a backup. An unreadable file is never overwritten.
