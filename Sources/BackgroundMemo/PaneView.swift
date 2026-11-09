@@ -26,7 +26,8 @@ final class PaneView: NSView {
             let scroll = NSScrollView(frame: initialFrame)
             let text = MemoTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
             text.configure(content: content)
-            Self.embed(text, in: scroll)
+            let scroller = PaneScroller()
+            Self.embed(text, in: scroll, scroller: scroller)
             scrollView = scroll
             textView = text
             super.init(frame: initialFrame)
@@ -34,9 +35,14 @@ final class PaneView: NSView {
 
             let documentID = pane.documentID
             text.onFocus = onFocus
-            text.onChange = { [unowned documentStore] in
-                // Strong capture: a queued save must never read an emptied placeholder.
+            text.onChange = { [weak text, unowned documentStore] in
+                guard let text else { return }
+                // Strong capture: the store owns this closure, and a queued save must still read the text.
                 documentStore.scheduleSave(id: documentID) { text.contentSnapshot() }
+            }
+            scroller.onMouseDown = { [weak text] in
+                guard let text, text.window?.firstResponder !== text else { return }
+                text.window?.makeFirstResponder(text)
             }
         } else {
             scrollView = nil
@@ -78,10 +84,11 @@ final class PaneView: NSView {
         onFocus()
     }
 
-    private static func embed(_ text: MemoTextView, in scroll: NSScrollView) {
+    private static func embed(_ text: MemoTextView, in scroll: NSScrollView, scroller: NSScroller) {
         scroll.autoresizingMask = [.width, .height]
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        scroll.verticalScroller = scroller
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
@@ -98,5 +105,20 @@ final class PaneView: NSView {
         label.frame = bounds.insetBy(dx: 16, dy: bounds.height / 2 - 30)
         label.autoresizingMask = [.width, .minYMargin, .maxYMargin]
         return label
+    }
+}
+
+/// Scroller that reports presses, so clicking only the scrollbar still focuses its pane.
+private final class PaneScroller: NSScroller {
+    var onMouseDown: (() -> Void)?
+
+    // AppKit keeps subclasses out of overlay style unless they opt in.
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown?()
+        super.mouseDown(with: event)
     }
 }

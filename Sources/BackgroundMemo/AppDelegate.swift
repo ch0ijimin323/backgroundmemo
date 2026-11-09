@@ -18,6 +18,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerLoginItemOnFirstLaunch()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let controller, !controller.confirmTermination() else { return .terminateNow }
+        return .terminateCancel
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         controller?.saveEverything()
     }
