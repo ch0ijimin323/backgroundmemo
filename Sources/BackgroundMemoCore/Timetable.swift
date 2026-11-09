@@ -94,7 +94,8 @@ public enum NEISTimetable {
 
         var subjects: [Int: String] = [:]
         for row in rows {
-            if let ymd, let rowDate = row["ALL_TI_YMD"] as? String, rowDate != ymd { continue }
+            // A row for any other day means the response cannot be trusted over the cached timetable.
+            if let ymd, row["ALL_TI_YMD"] as? String != ymd { throw TimetableError.malformedResponse }
             guard let period = integer(row["PERIO"]), period > 0 else { throw TimetableError.malformedResponse }
             let subject = (row["ITRT_CNTNT"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !subject.isEmpty, subjects[period] == nil { subjects[period] = subject }
@@ -170,11 +171,13 @@ public final class TimetableStore {
     private let autosaveDelay: TimeInterval
     private let apiKey: @MainActor () -> String?
     private let transport: TimetableTransport
+    private let failureCooldown: TimeInterval
     private let isSaveBlocked: Bool
 
     private var cache: TimetableCache
     private var fetchedThisSession: Set<String> = []
     private var failedDays: Set<String> = []
+    private var lastFailure: [String: Date] = [:]
     private var inFlight: [String: InFlight] = [:]
     private var hasPendingSave = false
     private var saveTask: Task<Void, Never>?
@@ -182,9 +185,11 @@ public final class TimetableStore {
     public init(
         paths: AppPaths,
         autosaveDelay: TimeInterval = 1.0,
+        failureCooldown: TimeInterval = 30,
         apiKey: @escaping @MainActor () -> String?,
         transport: @escaping TimetableTransport = TimetableNetwork.live
     ) {
+        self.failureCooldown = failureCooldown
         self.paths = paths
         self.autosaveDelay = autosaveDelay
         self.apiKey = apiKey
@@ -208,6 +213,7 @@ public final class TimetableStore {
         guard !NEISTimetable.isWeekend(date) else { return }
         let day = PlannerState.dayKey(for: date)
         guard !fetchedThisSession.contains(day), inFlight[day] == nil else { return }
+        if let failed = lastFailure[day], Date().timeIntervalSince(failed) < failureCooldown { return }
         failedDays.remove(day)
         guard let url = NEISTimetable.requestURL(dayKey: day, apiKey: apiKey()) else {
             failedDays.insert(day)
@@ -261,12 +267,14 @@ public final class TimetableStore {
         case .success(let result):
             fetchedThisSession.insert(day)
             failedDays.remove(day)
+            lastFailure[day] = nil
             if cache.days[day] != result {
                 cache.days[day] = result
                 scheduleSave()
             }
         case .failure(let error):
             failedDays.insert(day)
+            lastFailure[day] = Date()
             Self.logger.error("Timetable fetch failed for \(day, privacy: .public): \(String(describing: error), privacy: .public)")
         }
         onUpdate?()

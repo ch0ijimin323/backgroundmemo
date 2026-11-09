@@ -564,6 +564,33 @@ private func run() async -> Int {
         try expect(parseError(head) == .api(code: "ERROR-500"), "head error")
     })
 
+    record(await check("timetable rejects rows for another day or without a date") {
+        let wrongDay = Data(#"{"hisTimetable":[{"head":[{"list_total_count":1},{"RESULT":{"CODE":"INFO-000"}}]},{"row":[{"ALL_TI_YMD":"20261111","PERIO":"1","ITRT_CNTNT":"수학"}]}]}"#.utf8)
+        let noDate = Data(#"{"hisTimetable":[{"head":[{"list_total_count":1},{"RESULT":{"CODE":"INFO-000"}}]},{"row":[{"PERIO":"1","ITRT_CNTNT":"수학"}]}]}"#.utf8)
+        for data in [wrongDay, noDate] {
+            do {
+                _ = try NEISTimetable.parse(data, ymd: "20261110")
+                throw CheckFailure(description: "expected malformed response")
+            } catch TimetableError.malformedResponse {}
+        }
+    })
+
+    record(await check("timetable waits before retrying a failed day") {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let calls = LockedCounter()
+        let store = TimetableStore(paths: AppPaths(root: root), autosaveDelay: 0, failureCooldown: 60, apiKey: { nil }, transport: { _ in
+            calls.increment()
+            return (Data(), 500)
+        })
+        let monday = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 11, day: 9, hour: 12).date!
+        store.request(date: monday)
+        try await Task.sleep(for: .milliseconds(100))
+        store.request(date: monday)
+        try await Task.sleep(for: .milliseconds(100))
+        if calls.value != 1 { throw CheckFailure(description: "expected one request, got \(calls.value)") }
+    })
+
     record(await check("timetable broken JSON fails") {
         try expect(parseError(Data("{broken".utf8)) == .malformedResponse, "broken JSON")
         try expect(parseError(Data("[]".utf8)) == .malformedResponse, "wrong root")
@@ -589,7 +616,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let date = try gregorianDate(2026, 11, 9)
         let good = Data(timetableJSON(total: 1, rows: [("1", "국어")]).utf8)
-        let first = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: { _ in (good, 200) })
+        let first = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (good, 200) })
         first.request(date: date)
         try await waitUntilSettled(first, date)
         first.flush()
@@ -605,7 +632,7 @@ private func run() async -> Int {
             { _ in throw URLError(.notConnectedToInternet) },
         ]
         for transport in failures {
-            let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: transport)
+            let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
             store.request(date: date)
             try await waitUntilSettled(store, date)
             let snapshot = store.snapshot(for: date)
@@ -621,7 +648,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let counter = RequestCounter()
         let body = Data(timetableJSON(total: 1, rows: [("1", "국어")]).utf8)
-        let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: { _ in
+        let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in
             counter.increment()
             return (body, 200)
         })
@@ -645,7 +672,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let counter = RequestCounter()
         let key = StringBox("")
-        let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { key.text.isEmpty ? nil : key.text }, transport: { url in
+        let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { key.text.isEmpty ? nil : key.text }, transport: { url in
             counter.increment()
             let keyed = url.query?.contains("KEY=") == true
             let rows = keyed ? [("1", "국어"), ("2", "영어")] : [("1", "국어")]
@@ -669,7 +696,7 @@ private func run() async -> Int {
     record(await check("timetable late response stays on its own day") {
         let paths = try temporaryPaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
-        let store = TimetableStore(paths: paths, autosaveDelay: 0, apiKey: { nil }, transport: { url in
+        let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { url in
             let isMonday = url.query?.contains("TI_FROM_YMD=20261109") == true
             if isMonday { try await Task.sleep(for: .milliseconds(60)) }
             let rows = isMonday ? [("1", "월요일")] : [("1", "화요일")]
@@ -761,4 +788,11 @@ struct CoreChecks {
         let failures = await run()
         if failures != 0 { exit(1) }
     }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func increment() { lock.withLock { count += 1 } }
 }
