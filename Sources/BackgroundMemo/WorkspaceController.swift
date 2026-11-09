@@ -183,7 +183,6 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
         let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
         glass.cornerRadius = 22
         glass.style = .clear
-        glass.tintColor = NSColor.black.withAlphaComponent(0.25)
         glass.autoresizingMask = [.width, .height]
 
         let root = WorkspaceRootView(frame: glass.bounds, tabBar: tabBar, splitContainer: splitContainer)
