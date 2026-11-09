@@ -79,6 +79,10 @@ enum Alerts {
         }
     }
 
+    static func showLoginItemFailed() {
+        show(message: "자동 실행 설정을 변경하지 못했습니다", information: "시스템 설정의 로그인 항목에서 변경할 수 있습니다.")
+    }
+
     static func showKeyStoreFailed() {
         show(message: "인증키를 변경하지 못했습니다", information: "앱 데이터 폴더에 인증키를 저장하거나 지울 수 없습니다.")
     }

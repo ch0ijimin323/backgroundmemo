@@ -31,6 +31,8 @@ enum MainMenu {
 
     private static func makeAppMenu() -> NSMenu {
         let menu = NSMenu(title: "BackgroundMemo")
+        menu.add("로그인 시 자동 실행", #selector(LoginItemToggle.toggle(_:)), key: "", target: LoginItemToggle.shared)
+        menu.addItem(.separator())
         menu.add("BackgroundMemo 종료", #selector(NSApplication.terminate(_:)), key: "q", target: NSApp)
         return menu
     }
