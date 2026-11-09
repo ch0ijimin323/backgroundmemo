@@ -437,6 +437,11 @@ private final class PlannerRow: NSView, NSTextFieldDelegate {
             NSColor.white.withAlphaComponent(0.1).setFill()
             bounds.fill()
         }
+        // Adjacent classes and spans would otherwise read as one continuous band.
+        if lesson?.isFirstSlot == true || span?.isStart == true {
+            NSColor.white.withAlphaComponent(0.4).setFill()
+            NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+        }
         if endsHour {
             NSColor.white.withAlphaComponent(0.14).setFill()
             NSRect(x: 8, y: bounds.height - 1, width: bounds.width - 16, height: 1).fill()
