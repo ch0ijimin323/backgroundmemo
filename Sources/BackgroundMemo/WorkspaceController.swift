@@ -3,25 +3,31 @@ import BackgroundMemoCore
 
 /// Owns the model and stores, applies every edit, and keeps the views in step with the model.
 @MainActor
-final class WorkspaceController: NSObject, NSWindowDelegate {
+final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private static let workspaceSaveDelay: Duration = .seconds(1)
 
     private let workspaceStore: WorkspaceStore
     private let documentStore: DocumentStore
+    private let planStore: PlanStore
     private var state: WorkspaceState
 
     private let window: DesktopWindow
     private let tabBar = TabBarView()
     private let splitContainer = SplitContainerView()
+    private let plannerView: PlannerView
+    private let todoView: TodoView
 
     /// Views for every pane opened so far, including those in background tabs.
     private var paneViews: [UUID: PaneView] = [:]
     private var isRendering = false
     private var workspaceSaveTask: Task<Void, Never>?
 
-    init(workspaceStore: WorkspaceStore, documentStore: DocumentStore) {
+    init(workspaceStore: WorkspaceStore, documentStore: DocumentStore, planStore: PlanStore) {
         self.workspaceStore = workspaceStore
         self.documentStore = documentStore
+        self.planStore = planStore
+        plannerView = PlannerView(planStore: planStore)
+        todoView = TodoView(planStore: planStore)
         let loaded = workspaceStore.load()
         state = loaded.state
         window = DesktopWindow(contentRect: WindowPlacement.initialFrame(saved: loaded.state.windowFrame))
@@ -48,23 +54,27 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
     func showWindow() {
         window.orderFront(nil)
         window.makeKey()
+        // The menu bar is installed after the first render.
+        MainMenu.setFontMenuEnabled(isMemoTabSelected)
         focusSelectedPane()
     }
 
-    /// Writes the workspace and all pending memos. Returns the documents that failed to save.
+    /// Writes the workspace, memos, and plans, and reports what failed to save.
     @discardableResult
-    func saveEverything() -> [UUID] {
+    func saveEverything() -> SaveFailures {
         if tabBar.isRenaming { focusSelectedPane() }
+        plannerView.finishFieldEditing()
+        todoView.finishFieldEditing()
         workspaceSaveTask?.cancel()
         saveWorkspaceNow()
-        return documentStore.flush()
+        return SaveFailures(documents: documentStore.flush(), planFiles: planStore.flush())
     }
 
-    /// Saves before quitting. Returns false when a memo failed to save and the user stays.
+    /// Saves before quitting. Returns false when something failed to save and the user stays.
     func confirmTermination() -> Bool {
-        let failedDocuments = saveEverything()
-        guard !failedDocuments.isEmpty else { return true }
-        return Alerts.confirmQuitWithUnsavedDocuments(count: failedDocuments.count)
+        let failures = saveEverything()
+        guard !failures.isEmpty else { return true }
+        return Alerts.confirmQuitWithUnsavedChanges(failures)
     }
 
     // MARK: Menu actions
@@ -79,17 +89,39 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
             NSApp.keyWindow?.performClose(sender)
             return
         }
+        guard isMemoTabSelected else { return }
         closePane(id: state.selectedTab.focusedPaneID)
     }
 
     @objc func splitLeftRight(_ sender: Any?) { splitFocusedPane(axis: .horizontal) }
     @objc func splitTopBottom(_ sender: Any?) { splitFocusedPane(axis: .vertical) }
-    @objc func focusPreviousPane(_ sender: Any?) { mutate { $0.moveFocus(delta: -1) } }
-    @objc func focusNextPane(_ sender: Any?) { mutate { $0.moveFocus(delta: 1) } }
+    @objc func focusPreviousPane(_ sender: Any?) { moveFocus(delta: -1) }
+    @objc func focusNextPane(_ sender: Any?) { moveFocus(delta: 1) }
+
+    private var isMemoTabSelected: Bool { state.selectedTab.kind == .memo }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(closeFocusedPane(_:)):
+            // Stays enabled for a key Font or Colors panel, which ⌘W closes.
+            return NSApp.keyWindow !== window || isMemoTabSelected
+        case #selector(splitLeftRight(_:)), #selector(splitTopBottom(_:)),
+             #selector(focusPreviousPane(_:)), #selector(focusNextPane(_:)):
+            return isMemoTabSelected
+        default:
+            return true
+        }
+    }
 
     // MARK: Model edits
 
+    private func moveFocus(delta: Int) {
+        guard isMemoTabSelected else { return }
+        mutate { $0.moveFocus(delta: delta) }
+    }
+
     private func splitFocusedPane(axis: SplitAxis) {
+        guard isMemoTabSelected else { return }
         mutate { state in
             let focused = state.selectedTab.focusedPaneID
             state.splitPane(id: focused, axis: axis)
@@ -183,7 +215,11 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
         let backdrop = GlassBackdrop(frame: NSRect(origin: .zero, size: size))
         backdrop.autoresizingMask = [.width, .height]
 
-        let root = WorkspaceRootView(frame: backdrop.bounds, tabBar: tabBar, splitContainer: splitContainer)
+        let root = WorkspaceRootView(
+            frame: backdrop.bounds,
+            tabBar: tabBar,
+            contentViews: [splitContainer, plannerView, todoView]
+        )
         root.autoresizingMask = [.width, .height]
         backdrop.addSubview(root)
         window.contentView = backdrop
@@ -212,16 +248,29 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
 
         let tab = state.selectedTab
         var visible: [UUID: PaneView] = [:]
-        for pane in tab.root.panes {
-            visible[pane.id] = paneView(for: pane)
+        if tab.kind == .memo {
+            for pane in tab.root.panes {
+                visible[pane.id] = paneView(for: pane)
+            }
         }
-        splitContainer.render(root: tab.root, paneViews: visible)
+        splitContainer.render(root: tab.kind == .memo ? tab.root : nil, paneViews: visible)
+        showContent(for: tab.kind)
         tabBar.update(tabs: state.tabs, selectedID: state.selectedTabID)
 
         let liveIDs = Set(state.tabs.flatMap { $0.root.panes.map(\.id) })
         paneViews = paneViews.filter { liveIDs.contains($0.key) }
 
         if focus { focusSelectedPane() }
+    }
+
+    /// The outgoing fixed view finishes editing first so nothing typed there is left unsaved.
+    private func showContent(for kind: TabKind) {
+        if kind != .planner, !plannerView.isHidden { plannerView.finishFieldEditing() }
+        if kind != .todo, !todoView.isHidden { todoView.finishFieldEditing() }
+        splitContainer.isHidden = kind != .memo
+        plannerView.isHidden = kind != .planner
+        todoView.isHidden = kind != .todo
+        MainMenu.setFontMenuEnabled(kind == .memo)
     }
 
     private func paneView(for pane: Pane) -> PaneView {
@@ -239,6 +288,17 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
     }
 
     private func focusSelectedPane() {
+        switch state.selectedTab.kind {
+        case .memo:
+            focusMemoPane()
+        case .planner:
+            if tabBar.isRenaming { window.makeFirstResponder(nil) }
+        case .todo:
+            todoView.focusInput()
+        }
+    }
+
+    private func focusMemoPane() {
         guard let target = paneViews[state.selectedTab.focusedPaneID]?.focusTarget,
               window.firstResponder !== target else { return }
         window.makeFirstResponder(target)
@@ -264,16 +324,16 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
     }
 }
 
-/// Flipped root inside the glass: the tab bar on top, panes below.
+/// Flipped root inside the glass: the tab bar on top, the selected tab's content below.
 private final class WorkspaceRootView: NSView {
     private let tabBar: TabBarView
-    private let splitContainer: SplitContainerView
+    private let contentViews: [NSView]
 
-    init(frame: NSRect, tabBar: TabBarView, splitContainer: SplitContainerView) {
+    init(frame: NSRect, tabBar: TabBarView, contentViews: [NSView]) {
         self.tabBar = tabBar
-        self.splitContainer = splitContainer
+        self.contentViews = contentViews
         super.init(frame: frame)
-        addSubview(splitContainer)
+        contentViews.forEach(addSubview)
         addSubview(tabBar)
     }
 
@@ -288,11 +348,12 @@ private final class WorkspaceRootView: NSView {
         let barHeight: CGFloat = 36
         tabBar.frame = NSRect(x: inset, y: inset, width: bounds.width - inset * 2, height: barHeight)
         let top = tabBar.frame.maxY + 6
-        splitContainer.frame = NSRect(
+        let contentFrame = NSRect(
             x: inset,
             y: top,
             width: bounds.width - inset * 2,
             height: max(0, bounds.height - top - inset)
         )
+        contentViews.forEach { $0.frame = contentFrame }
     }
 }

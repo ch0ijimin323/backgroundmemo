@@ -3,6 +3,22 @@ import AppKit
 /// Builds the Korean menu bar. Text actions go through the responder chain to the focused memo.
 @MainActor
 enum MainMenu {
+    private static let fontMenuTitle = "서체"
+
+    /// Font actions are switched off as a whole on fixed tabs, including their key equivalents.
+    static func setFontMenuEnabled(_ enabled: Bool) {
+        guard let menu = NSApp.mainMenu?.items.first(where: { $0.title == fontMenuTitle })?.submenu else { return }
+        setEnabled(enabled, in: menu)
+    }
+
+    private static func setEnabled(_ enabled: Bool, in menu: NSMenu) {
+        menu.autoenablesItems = enabled
+        for item in menu.items {
+            item.isEnabled = enabled
+            if let submenu = item.submenu { setEnabled(enabled, in: submenu) }
+        }
+    }
+
     static func make(controller: WorkspaceController) -> NSMenu {
         let main = NSMenu()
         main.addSubmenu(makeAppMenu())
@@ -40,7 +56,7 @@ enum MainMenu {
 
     private static func makeFontMenu() -> NSMenu {
         let fonts = NSFontManager.shared
-        let menu = NSMenu(title: "서체")
+        let menu = NSMenu(title: fontMenuTitle)
         menu.add(
             "서체 보기", #selector(NSFontManager.orderFrontFontPanel(_:)),
             key: "t", modifiers: [.command, .option], target: fonts
