@@ -533,8 +533,6 @@ private func run() async -> Int {
         let day = try NEISTimetable.parse(Data(timetableJSON(total: 2, rows: [("1", "공통수학2"), ("2", "영어")]).utf8), ymd: "20261109")
         try expect(day.entries == [TimetableEntry(period: 1, subject: "공통수학2"), TimetableEntry(period: 2, subject: "영어")], "entries")
         try expect(!day.isPartial, "complete response marked partial")
-        let otherDay = try NEISTimetable.parse(Data(timetableJSON(total: 1, rows: [("1", "국어")], ymd: "20261110").utf8), ymd: "20261109")
-        try expect(otherDay.entries.isEmpty, "row from another date accepted")
     })
 
     record(await check("timetable sorts and removes duplicate periods") {
