@@ -1,10 +1,13 @@
 import AppKit
 import Darwin
+import os
 
 // CONTRACT: signatures are fixed. Bodies are implemented by the core workstream.
 
 public enum StoreError: Error, Equatable {
     case unreadableDocument(UUID)
+    case trashedDocument(UUID)
+    case workspaceSaveBlocked
 }
 
 public struct AppPaths: Sendable {
@@ -23,50 +26,90 @@ public struct LoadedWorkspace: Sendable {
     public var state: WorkspaceState
     /// Set when workspace.json was corrupt and moved aside to this URL.
     public var corruptBackup: URL?
+    /// True when the existing workspace could not be read or backed up, so saving is unsafe.
+    public var saveBlocked: Bool
 }
 
 public struct WorkspaceStore: Sendable {
+    private static let logger = Logger(subsystem: "BackgroundMemo", category: "WorkspaceStore")
     private let paths: AppPaths
+    private let saveGuard = WorkspaceSaveGuard()
     public init(paths: AppPaths) { self.paths = paths }
 
-    /// Missing file: initial state. Corrupt file: moved to workspace.corrupt-<timestamp>.json, and
-    /// each .rtfd in Documents reopens as its own tab (initial state when there are none).
+    /// Missing file: surviving documents reopen as tabs, or initial state when there are none.
+    /// Corrupt file: backed up to workspace.corrupt-<timestamp>.json before the same recovery.
+    /// Recovery is saved immediately; unreadable or unbacked-up files block saving this session.
     public func load() -> LoadedWorkspace {
         let manager = FileManager.default
         guard manager.fileExists(atPath: paths.workspaceFile.path) else {
-            return LoadedWorkspace(state: .initial(), corruptBackup: nil)
+            return recover(backup: nil, saveBlocked: false)
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: paths.workspaceFile)
+        } catch {
+            saveGuard.block()
+            Self.logger.error("Workspace read failed: \(String(describing: error), privacy: .public)")
+            return LoadedWorkspace(state: recoveredState(), corruptBackup: nil, saveBlocked: true)
         }
         do {
-            let state = try JSONDecoder().decode(WorkspaceState.self, from: Data(contentsOf: paths.workspaceFile))
+            let state = try JSONDecoder().decode(WorkspaceState.self, from: data)
             guard state.isValid else { throw CocoaError(.coderReadCorrupt) }
-            return LoadedWorkspace(state: state, corruptBackup: nil)
+            return LoadedWorkspace(state: state, corruptBackup: nil, saveBlocked: saveGuard.isBlocked)
         } catch {
             let stamp = Int(Date().timeIntervalSince1970 * 1000)
             let backup = paths.root.appendingPathComponent("workspace.corrupt-\(stamp)-\(UUID().uuidString).json")
-            let moved = (try? manager.moveItem(at: paths.workspaceFile, to: backup)) != nil
-            let documents = (try? manager.contentsOfDirectory(at: paths.documentsDirectory,
-                includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
-            let ids = documents.filter { $0.pathExtension.lowercased() == "rtfd" }
-                .compactMap { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) }
-                .sorted { $0.uuidString < $1.uuidString }
-            var state = WorkspaceState.initial()
-            if !ids.isEmpty {
-                state.tabs = ids.enumerated().map { index, id in
-                    let pane = Pane(documentID: id)
-                    return Tab(title: "메모 \(index + 1)", root: .pane(pane), focusedPaneID: pane.id)
-                }
-                state.selectedTabID = state.tabs[0].id
+            var backedUp = (try? manager.moveItem(at: paths.workspaceFile, to: backup)) != nil
+            if !backedUp {
+                backedUp = (try? manager.copyItem(at: paths.workspaceFile, to: backup)) != nil
             }
-            return LoadedWorkspace(state: state, corruptBackup: moved ? backup : nil)
+            if !backedUp {
+                saveGuard.block()
+                Self.logger.error("Could not back up corrupt workspace at \(self.paths.workspaceFile.path, privacy: .public)")
+            }
+            return recover(backup: backedUp ? backup : nil, saveBlocked: !backedUp)
         }
     }
 
     /// Atomic write.
     public func save(_ state: WorkspaceState) throws {
+        guard !saveGuard.isBlocked else { throw StoreError.workspaceSaveBlocked }
         guard state.isValid else { throw CocoaError(.coderInvalidValue) }
         try FileManager.default.createDirectory(at: paths.root, withIntermediateDirectories: true)
         try JSONEncoder().encode(state).write(to: paths.workspaceFile, options: .atomic)
     }
+
+    private func recover(backup: URL?, saveBlocked: Bool) -> LoadedWorkspace {
+        let state = recoveredState()
+        if !saveBlocked && !saveGuard.isBlocked {
+            do { try save(state) }
+            catch { Self.logger.error("Recovered workspace save failed: \(String(describing: error), privacy: .public)") }
+        }
+        return LoadedWorkspace(state: state, corruptBackup: backup, saveBlocked: saveBlocked || saveGuard.isBlocked)
+    }
+
+    private func recoveredState() -> WorkspaceState {
+        let documents = (try? FileManager.default.contentsOfDirectory(at: paths.documentsDirectory,
+            includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        let ids = documents.filter { $0.pathExtension.lowercased() == "rtfd" }
+            .compactMap { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) }
+            .sorted { $0.uuidString < $1.uuidString }
+        guard !ids.isEmpty else { return .initial() }
+        var state = WorkspaceState.initial()
+        state.tabs = ids.enumerated().map { index, id in
+            let pane = Pane(documentID: id)
+            return Tab(title: "메모 \(index + 1)", root: .pane(pane), focusedPaneID: pane.id)
+        }
+        state.selectedTabID = state.tabs[0].id
+        return state
+    }
+}
+
+private final class WorkspaceSaveGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var blocked = false
+    var isBlocked: Bool { lock.withLock { blocked } }
+    func block() { lock.withLock { blocked = true } }
 }
 
 private extension WorkspaceState {
@@ -76,6 +119,8 @@ private extension WorkspaceState {
         let panes = tabs.flatMap { $0.root.panes }
         guard Set(panes.map(\.id)).count == panes.count,
               Set(panes.map(\.documentID)).count == panes.count else { return false }
+        let splitIDs = tabs.flatMap { $0.root.splitIDs }
+        guard Set(splitIDs).count == splitIDs.count else { return false }
         return tabs.allSatisfy { tab in
             tab.root.panes.contains(where: { $0.id == tab.focusedPaneID }) && tab.root.validRatios
         }
@@ -83,6 +128,13 @@ private extension WorkspaceState {
 }
 
 private extension SplitNode {
+    var splitIDs: [UUID] {
+        switch self {
+        case .pane: []
+        case .split(let split): [split.id] + split.first.splitIDs + split.second.splitIDs
+        }
+    }
+
     var validRatios: Bool {
         switch self {
         case .pane: true
@@ -95,19 +147,28 @@ private extension SplitNode {
 
 @MainActor
 public final class DocumentStore {
+    private static let logger = Logger(subsystem: "BackgroundMemo", category: "DocumentStore")
     private let paths: AppPaths
     private let autosaveDelay: TimeInterval
+    private let trashAction: @MainActor (URL) throws -> Void
     private var unreadableIDs: Set<UUID> = []
+    private var trashedIDs: Set<UUID> = []
     private var pending: [UUID: PendingSave] = [:]
 
     private struct PendingSave {
-        let task: Task<Void, Never>
+        var task: Task<Void, Never>?
         let content: @MainActor () -> NSAttributedString
+        let generation: UUID
     }
 
-    public init(paths: AppPaths, autosaveDelay: TimeInterval = 1.0) {
+    public init(paths: AppPaths, autosaveDelay: TimeInterval = 1.0,
+                trashAction: @escaping @MainActor (URL) throws -> Void = { file in
+                    var resulting: NSURL?
+                    try FileManager.default.trashItem(at: file, resultingItemURL: &resulting)
+                }) {
         self.paths = paths
         self.autosaveDelay = autosaveDelay
+        self.trashAction = trashAction
     }
 
     private func url(for id: UUID) -> URL {
@@ -125,15 +186,15 @@ public final class DocumentStore {
                                           documentAttributes: nil)
         } catch {
             unreadableIDs.insert(id)
-            pending.removeValue(forKey: id)?.task.cancel()
+            pending.removeValue(forKey: id)?.task?.cancel()
             throw StoreError.unreadableDocument(id)
         }
     }
 
     /// Atomically writes RTFD including attachments, cancelling any pending autosave for this ID.
     public func save(_ text: NSAttributedString, id: UUID) throws {
-        pending.removeValue(forKey: id)?.task.cancel()
         guard !unreadableIDs.contains(id) else { throw StoreError.unreadableDocument(id) }
+        guard !trashedIDs.contains(id) else { throw StoreError.trashedDocument(id) }
         let manager = FileManager.default
         try manager.createDirectory(at: paths.documentsDirectory, withIntermediateDirectories: true)
         let destination = url(for: id)
@@ -157,37 +218,56 @@ public final class DocumentStore {
             try? manager.removeItem(at: temporary)
             throw error
         }
+        pending.removeValue(forKey: id)?.task?.cancel()
     }
 
     /// Debounced save: restarts the delay for this ID. The closure is read when the delay fires.
     public func scheduleSave(id: UUID, content: @escaping @MainActor () -> NSAttributedString) {
-        guard !unreadableIDs.contains(id) else { return }
-        pending.removeValue(forKey: id)?.task.cancel()
-        let delay = autosaveDelay
-        let task = Task { [weak self] in
-            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-            guard !Task.isCancelled, let self, let entry = self.pending.removeValue(forKey: id) else { return }
-            try? self.save(entry.content(), id: id)
-        }
-        pending[id] = PendingSave(task: task, content: content)
+        guard !unreadableIDs.contains(id), !trashedIDs.contains(id) else { return }
+        pending.removeValue(forKey: id)?.task?.cancel()
+        let generation = UUID()
+        pending[id] = PendingSave(task: nil, content: content, generation: generation)
+        armSave(id: id, generation: generation)
     }
 
-    /// Immediately writes every pending autosave.
-    public func flush() {
-        let saves = pending
-        pending.removeAll()
-        for (id, entry) in saves {
-            entry.task.cancel()
-            if !unreadableIDs.contains(id) { try? save(entry.content(), id: id) }
+    /// Immediately attempts every pending autosave and returns IDs that failed.
+    @discardableResult public func flush() -> [UUID] {
+        var failed: [UUID] = []
+        for id in Array(pending.keys).sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let entry = pending[id] else { continue }
+            entry.task?.cancel()
+            pending[id]?.task = nil
+            do {
+                try save(entry.content(), id: id)
+            } catch {
+                failed.append(id)
+                Self.logger.error("Document save failed for \(id.uuidString, privacy: .public): \(String(describing: error), privacy: .public)")
+                armSave(id: id, generation: entry.generation, retry: true)
+            }
+        }
+        return failed
+    }
+
+    private func armSave(id: UUID, generation: UUID, retry: Bool = false) {
+        let delay = retry ? max(1, autosaveDelay) : max(0, autosaveDelay)
+        pending[id]?.task = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard !Task.isCancelled, let self, let entry = self.pending[id], entry.generation == generation else { return }
+            do {
+                try self.save(entry.content(), id: id)
+            } catch {
+                Self.logger.error("Document save failed for \(id.uuidString, privacy: .public): \(String(describing: error), privacy: .public)")
+                self.armSave(id: id, generation: generation, retry: true)
+            }
         }
     }
 
     /// Cancels pending saves and moves the document to the system Trash. Missing file is not an error.
     public func trash(id: UUID) throws {
-        pending.removeValue(forKey: id)?.task.cancel()
+        if trashedIDs.contains(id) { return }
         let file = url(for: id)
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        var resulting: NSURL?
-        try FileManager.default.trashItem(at: file, resultingItemURL: &resulting)
+        if FileManager.default.fileExists(atPath: file.path) { try trashAction(file) }
+        pending.removeValue(forKey: id)?.task?.cancel()
+        trashedIDs.insert(id)
     }
 }

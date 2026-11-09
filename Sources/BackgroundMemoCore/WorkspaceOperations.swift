@@ -69,7 +69,9 @@ extension WorkspaceState {
         let documents = tabs[index].root.panes.map(\.documentID)
         tabs.remove(at: index)
         if tabs.isEmpty {
+            let frame = windowFrame
             self = .initial()
+            windowFrame = frame
         } else if selectedTabID == id {
             selectedTabID = tabs[min(index, tabs.count - 1)].id
         }
