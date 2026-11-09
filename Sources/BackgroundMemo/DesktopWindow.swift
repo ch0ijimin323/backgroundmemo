@@ -15,15 +15,9 @@ final class DesktopWindow: NSWindow {
         backgroundColor = .clear
         hasShadow = false
         isReleasedWhenClosed = false
+        minSize = WindowPlacement.minimumSize
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
-}
-
-/// Empty strip that moves the window, standing in for the future tab bar.
-final class WindowDragStrip: NSView {
-    override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
-    }
 }
