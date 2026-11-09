@@ -53,8 +53,16 @@ public struct WorkspaceStore: Sendable {
             return LoadedWorkspace(state: recoveredState(), corruptBackup: nil, saveBlocked: true)
         }
         do {
-            let state = try JSONDecoder().decode(WorkspaceState.self, from: data)
+            let decoded = try JSONDecoder().decode(WorkspaceState.self, from: data)
+            guard !decoded.tabs.isEmpty, decoded.tabs.contains(where: { $0.id == decoded.selectedTabID })
+            else { throw CocoaError(.coderReadCorrupt) }
+            var state = decoded
+            state.ensureFixedTabs()
             guard state.isValid else { throw CocoaError(.coderReadCorrupt) }
+            if state != decoded && !saveGuard.isBlocked {
+                do { try save(state) }
+                catch { Self.logger.error("Migrated workspace save failed: \(String(describing: error), privacy: .public)") }
+            }
             return LoadedWorkspace(state: state, corruptBackup: nil, saveBlocked: saveGuard.isBlocked)
         } catch {
             let stamp = Int(Date().timeIntervalSince1970 * 1000)
@@ -80,7 +88,8 @@ public struct WorkspaceStore: Sendable {
     }
 
     private func recover(backup: URL?, saveBlocked: Bool) -> LoadedWorkspace {
-        let state = recoveredState()
+        var state = recoveredState()
+        state.ensureFixedTabs()
         if !saveBlocked && !saveGuard.isBlocked {
             do { try save(state) }
             catch { Self.logger.error("Recovered workspace save failed: \(String(describing: error), privacy: .public)") }
@@ -96,11 +105,13 @@ public struct WorkspaceStore: Sendable {
             .sorted { $0.uuidString < $1.uuidString }
         guard !ids.isEmpty else { return .initial() }
         var state = WorkspaceState.initial()
-        state.tabs = ids.enumerated().map { index, id in
+        let recoveredTabs = ids.enumerated().map { index, id in
             let pane = Pane(documentID: id)
             return Tab(title: "메모 \(index + 1)", root: .pane(pane), focusedPaneID: pane.id)
         }
-        state.selectedTabID = state.tabs[0].id
+        state.tabs.removeAll { $0.kind == .memo }
+        state.tabs.append(contentsOf: recoveredTabs)
+        state.selectedTabID = recoveredTabs[0].id
         return state
     }
 }
@@ -116,6 +127,9 @@ private extension WorkspaceState {
     var isValid: Bool {
         guard !tabs.isEmpty, tabs.contains(where: { $0.id == selectedTabID }),
               Set(tabs.map(\.id)).count == tabs.count else { return false }
+        guard tabs.filter({ $0.kind == .planner }).count == 1,
+              tabs.filter({ $0.kind == .todo }).count == 1,
+              tabs.contains(where: { $0.kind == .memo }) else { return false }
         let panes = tabs.flatMap { $0.root.panes }
         guard Set(panes.map(\.id)).count == panes.count,
               Set(panes.map(\.documentID)).count == panes.count else { return false }

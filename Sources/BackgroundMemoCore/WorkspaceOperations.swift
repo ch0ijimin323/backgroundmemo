@@ -5,14 +5,21 @@ extension WorkspaceState {
     public static func initial() -> WorkspaceState {
         let pane = Pane()
         let tab = Tab(title: "메모 1", root: .pane(pane), focusedPaneID: pane.id)
-        return WorkspaceState(version: 1, windowFrame: nil, tabs: [tab], selectedTabID: tab.id)
+        return WorkspaceState(version: 1, windowFrame: nil,
+                              tabs: [makeFixedTab(.planner), makeFixedTab(.todo), tab], selectedTabID: tab.id)
+    }
+
+    private static func makeFixedTab(_ kind: TabKind) -> Tab {
+        let pane = Pane()
+        return Tab(title: kind == .planner ? "계획" : "할 일", kind: kind,
+                   root: .pane(pane), focusedPaneID: pane.id)
     }
 
     public var selectedTab: Tab { tabs.first { $0.id == selectedTabID } ?? tabs[0] }
 
     /// Appends a tab titled "메모 N" (lowest unused N), selects it, returns it.
     @discardableResult public mutating func addTab() -> Tab {
-        let used = Set(tabs.map(\.title))
+        let used = Set(tabs.filter { $0.kind == .memo }.map(\.title))
         var number = 1
         while used.contains("메모 \(number)") { number += 1 }
         let pane = Pane()
@@ -38,7 +45,7 @@ extension WorkspaceState {
 
     /// Replaces the pane with a split holding it (first) and a new pane (second), focuses the new pane.
     @discardableResult public mutating func splitPane(id: UUID, axis: SplitAxis) -> Pane? {
-        guard let index = tabs.firstIndex(where: { $0.root.panes.contains(where: { $0.id == id }) }) else { return nil }
+        guard let index = tabs.firstIndex(where: { $0.kind == .memo && $0.root.panes.contains(where: { $0.id == id }) }) else { return nil }
         let pane = Pane()
         guard let root = tabs[index].root.splitting(id: id, axis: axis, newPane: pane) else { return nil }
         tabs[index].root = root
@@ -49,10 +56,10 @@ extension WorkspaceState {
 
     /// Removes a pane from whichever tab holds it. Its sibling takes the parent split's place. Focus moves to a remaining pane.
     public mutating func closePane(id: UUID) -> PaneCloseResult {
-        guard let index = tabs.firstIndex(where: { $0.root.panes.contains(where: { $0.id == id }) }),
+        guard let index = tabs.firstIndex(where: { $0.kind == .memo && $0.root.panes.contains(where: { $0.id == id }) }),
               let pane = tabs[index].root.panes.first(where: { $0.id == id }) else { return .notFound }
         if tabs[index].root.panes.count == 1 {
-            let wasOnlyTab = tabs.count == 1
+            let wasOnlyTab = tabs.filter { $0.kind == .memo }.count == 1
             _ = closeTab(id: tabs[index].id)
             return wasOnlyTab ? .replacedLastTab(documentID: pane.documentID) : .closedTab(documentID: pane.documentID)
         }
@@ -65,15 +72,18 @@ extension WorkspaceState {
 
     /// Removes a whole tab, returning every document ID it held. Keeps the non-empty invariant by creating a fresh tab when needed.
     public mutating func closeTab(id: UUID) -> [UUID] {
-        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return [] }
+        guard let index = tabs.firstIndex(where: { $0.id == id && $0.kind == .memo }) else { return [] }
         let documents = tabs[index].root.panes.map(\.documentID)
-        tabs.remove(at: index)
-        if tabs.isEmpty {
-            let frame = windowFrame
-            self = .initial()
-            windowFrame = frame
-        } else if selectedTabID == id {
-            selectedTabID = tabs[min(index, tabs.count - 1)].id
+        if tabs.filter({ $0.kind == .memo }).count == 1 {
+            let pane = Pane()
+            let replacement = Tab(title: "메모 1", root: .pane(pane), focusedPaneID: pane.id)
+            tabs[index] = replacement
+            if selectedTabID == id { selectedTabID = replacement.id }
+        } else {
+            tabs.remove(at: index)
+            if selectedTabID == id {
+                selectedTabID = tabs.first(where: { $0.kind == .memo })!.id
+            }
         }
         return documents
     }
@@ -99,7 +109,32 @@ extension WorkspaceState {
     }
 
     /// Adds whichever fixed tabs are missing, and drops duplicate fixed tabs beyond the first.
-    public mutating func ensureFixedTabs() { fatalError("unimplemented") }
+    public mutating func ensureFixedTabs() {
+        var seen: [TabKind: UUID] = [:]
+        var retained: [Tab] = []
+        for tab in tabs {
+            if tab.kind == .memo {
+                retained.append(tab)
+            } else if let firstID = seen[tab.kind] {
+                if selectedTabID == tab.id { selectedTabID = firstID }
+            } else {
+                seen[tab.kind] = tab.id
+                retained.append(tab)
+            }
+        }
+        var missing: [Tab] = []
+        if seen[.planner] == nil { missing.append(Self.makeFixedTab(.planner)) }
+        if seen[.todo] == nil { missing.append(Self.makeFixedTab(.todo)) }
+        retained.insert(contentsOf: missing, at: 0)
+        if !retained.contains(where: { $0.kind == .memo }) {
+            let pane = Pane()
+            retained.append(Tab(title: "메모 1", root: .pane(pane), focusedPaneID: pane.id))
+        }
+        tabs = retained
+        if !tabs.contains(where: { $0.id == selectedTabID }), let memo = tabs.first(where: { $0.kind == .memo }) {
+            selectedTabID = memo.id
+        }
+    }
 
     /// Every document ID referenced by any tab.
     public var allDocumentIDs: Set<UUID> { Set(tabs.flatMap { $0.root.panes.map(\.documentID) }) }

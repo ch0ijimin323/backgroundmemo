@@ -49,23 +49,25 @@ private func run() async -> Int {
         state.windowFrame = frame
         let old = state.selectedTab.root.panes[0]
         try expect(state.closePane(id: old.id) == .replacedLastTab(documentID: old.documentID), "last pane result")
-        try expect(state.tabs.count == 1 && state.selectedTab.root.panes.count == 1, "empty workspace")
+        try expect(state.tabs.count == 3 && state.selectedTab.root.panes.count == 1, "last memo was not replaced")
         try expect(!state.allDocumentIDs.contains(old.documentID), "old document retained")
         try expect(state.windowFrame == frame, "closing last tab lost window frame")
         let second = state.addTab()
         let secondPane = second.root.panes[0]
         try expect(state.closePane(id: secondPane.id) == .closedTab(documentID: secondPane.documentID), "multi-tab last pane result")
-        try expect(state.tabs.count == 1 && state.selectedTabID == state.tabs[0].id, "invalid selection after tab close")
+        try expect(state.tabs.count == 3 && state.selectedTab.kind == .memo, "invalid selection after tab close")
     })
 
     record(await check("tab add move close") {
         var state = WorkspaceState.initial()
+        let plannerID = state.tabs[0].id
+        let todoID = state.tabs[1].id
         let first = state.selectedTab.id
         let second = state.addTab()
         let third = state.addTab()
         try expect(second.title == "메모 2" && third.title == "메모 3", "tab titles")
-        state.moveTab(from: 2, to: 0)
-        try expect(state.tabs.map(\.id) == [third.id, first, second.id], "tab move")
+        state.moveTab(from: 4, to: 0)
+        try expect(state.tabs.map(\.id) == [third.id, plannerID, todoID, first, second.id], "tab move")
         let documents = state.closeTab(id: third.id)
         try expect(documents.count == 1 && state.selectedTabID == first, "tab close selection")
         let replacement = state.addTab()
@@ -73,6 +75,70 @@ private func run() async -> Int {
         state.selectTab(id: second.id)
         state.renameTab(id: second.id, title: "Named")
         try expect(state.selectedTab.title == "Named", "select or rename")
+    })
+
+    record(await check("fixed tab rules") {
+        var state = WorkspaceState.initial()
+        try expect(state.tabs.map(\.kind) == [.planner, .todo, .memo], "initial tab kinds")
+        try expect(state.tabs.map(\.title) == ["계획", "할 일", "메모 1"], "initial titles")
+        try expect(state.selectedTab.kind == .memo, "initial selection")
+        let planner = state.tabs[0]
+        let todo = state.tabs[1]
+        let old = state
+        try expect(state.closeTab(id: planner.id).isEmpty, "planner closed")
+        try expect(state.closePane(id: todo.root.panes[0].id) == .notFound, "todo pane closed")
+        try expect(state.splitPane(id: planner.root.panes[0].id, axis: .horizontal) == nil, "planner split")
+        try expect(state == old, "fixed tab operation changed state")
+        state.moveTab(from: 0, to: 2)
+        try expect(state.tabs.map(\.kind) == [.todo, .memo, .planner], "fixed tab did not reorder")
+        state.ensureFixedTabs()
+        try expect(state.tabs.map(\.kind) == [.todo, .memo, .planner], "ensureFixedTabs changed existing order")
+        let memo = state.addTab()
+        try expect(memo.title == "메모 2", "fixed titles affected memo numbering")
+        try expect(state.tabs.filter { $0.kind == .memo }.count == 2, "memo tab not added")
+    })
+
+    record(await check("legacy workspace migration preserves memos") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        var legacy = WorkspaceState.initial()
+        legacy.tabs.removeAll { $0.kind != .memo }
+        let originalPane = legacy.selectedTab.root.panes[0]
+        _ = legacy.splitPane(id: originalPane.id, axis: .vertical)
+        let originalMemo = legacy.tabs[0]
+        let frame = WindowFrame(x: 1, y: 2, width: 500, height: 300)
+        legacy.windowFrame = frame
+        var json = try require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any], "legacy JSON shape")
+        var tabs = try require(json["tabs"] as? [[String: Any]], "legacy tabs shape")
+        for index in tabs.indices { tabs[index].removeValue(forKey: "kind") }
+        json["tabs"] = tabs
+        try JSONSerialization.data(withJSONObject: json).write(to: paths.workspaceFile)
+        let store = WorkspaceStore(paths: paths)
+        let loaded = store.load()
+        try expect(loaded.corruptBackup == nil && !loaded.saveBlocked, "legacy JSON treated as corrupt")
+        try expect(loaded.state.tabs.map(\.kind) == [.planner, .todo, .memo], "fixed tabs missing from migration")
+        try expect(loaded.state.tabs[2] == originalMemo, "legacy memo or split changed")
+        try expect(loaded.state.windowFrame == frame && loaded.state.selectedTabID == originalMemo.id, "legacy frame or selection changed")
+        try expect(store.load().state == loaded.state, "migrated workspace was not saved immediately")
+        let documents = (try? FileManager.default.contentsOfDirectory(at: paths.documentsDirectory,
+            includingPropertiesForKeys: nil)) ?? []
+        try expect(documents.isEmpty, "fixed placeholder document was created")
+    })
+
+    record(await check("duplicate fixed tabs are normalized") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        var state = WorkspaceState.initial()
+        let original = state.tabs[0]
+        let pane = Pane()
+        let duplicate = Tab(title: "duplicate", kind: .planner, root: .pane(pane), focusedPaneID: pane.id)
+        state.tabs.append(duplicate)
+        state.selectedTabID = duplicate.id
+        try JSONEncoder().encode(state).write(to: paths.workspaceFile)
+        let loaded = WorkspaceStore(paths: paths).load()
+        try expect(loaded.corruptBackup == nil, "duplicate fixed tab treated as corrupt")
+        try expect(loaded.state.tabs.map(\.kind) == [.planner, .todo, .memo], "duplicate fixed tab survived")
+        try expect(loaded.state.selectedTabID == original.id, "selected duplicate was not remapped")
     })
 
     record(await check("focus wrap and ratio clamp") {
@@ -99,7 +165,7 @@ private func run() async -> Int {
         let paths = try temporaryPaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let store = WorkspaceStore(paths: paths)
-        try expect(store.load().state.tabs.count == 1, "missing workspace")
+        try expect(store.load().state.tabs.count == 3, "missing workspace")
         var state = WorkspaceState.initial()
         _ = state.splitPane(id: state.selectedTab.root.panes[0].id, axis: .horizontal)
         state.windowFrame = WindowFrame(x: 1, y: 2, width: 300, height: 400)
@@ -117,10 +183,10 @@ private func run() async -> Int {
         try Data("{broken".utf8).write(to: paths.workspaceFile)
         let loaded = WorkspaceStore(paths: paths).load()
         try expect(loaded.corruptBackup != nil, "no corrupt backup")
-        try expect(loaded.state.tabs.count == 2 && loaded.state.allDocumentIDs == Set([a, b]), "documents not recovered")
+        try expect(loaded.state.tabs.count == 4 && memoDocumentIDs(loaded.state) == Set([a, b]), "documents not recovered")
         try expect(FileManager.default.fileExists(atPath: loaded.corruptBackup!.path), "backup absent")
         try expect(!loaded.saveBlocked, "backed-up workspace blocked saving")
-        try expect(WorkspaceStore(paths: paths).load().state.allDocumentIDs == Set([a, b]), "recovery was not saved immediately")
+        try expect(memoDocumentIDs(WorkspaceStore(paths: paths).load().state) == Set([a, b]), "recovery was not saved immediately")
     })
 
     record(await check("missing JSON recovers documents immediately") {
@@ -129,7 +195,7 @@ private func run() async -> Int {
         let id = UUID()
         try DocumentStore(paths: paths).save(NSAttributedString(string: "survivor"), id: id)
         let loaded = WorkspaceStore(paths: paths).load()
-        try expect(loaded.state.allDocumentIDs == Set([id]), "missing JSON did not scan documents")
+        try expect(memoDocumentIDs(loaded.state) == Set([id]), "missing JSON did not scan documents")
         try expect(!loaded.saveBlocked && loaded.corruptBackup == nil, "missing JSON recovery flags")
         try expect(FileManager.default.fileExists(atPath: paths.workspaceFile.path), "recovery was not saved in load")
     })
@@ -186,6 +252,122 @@ private func run() async -> Int {
                 first: .pane(other), second: .pane(Pane())))))
         try JSONEncoder().encode(invalid).write(to: paths.workspaceFile)
         try expect(store.load().corruptBackup != nil, "duplicate split ID accepted")
+    })
+
+    record(await check("planner entries and Gregorian day key") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", hour: 5, text: "ignored")
+        planner.setEntry(day: "2026-11-10", hour: 24, text: "ignored")
+        try expect(planner.days.isEmpty, "out-of-range hour stored")
+        planner.setEntry(day: "2026-11-10", hour: 6, text: "  morning  ")
+        planner.setEntry(day: "2026-11-10", hour: 23, text: "night")
+        try expect(planner.entry(day: "2026-11-10", hour: 6) == "  morning  ", "entry text changed")
+        planner.setEntry(day: "2026-11-10", hour: 6, text: " \n ")
+        try expect(planner.entry(day: "2026-11-10", hour: 6).isEmpty && planner.days.count == 1, "blank entry not removed")
+        planner.setEntry(day: "2026-11-10", hour: 23, text: "\t")
+        try expect(planner.days.isEmpty, "empty day not removed")
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(identifier: "Asia/Seoul")!
+        let date = try require(gregorian.date(from: DateComponents(year: 2026, month: 11, day: 10, hour: 12)), "date creation")
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = gregorian.timeZone
+        try expect(PlannerState.dayKey(for: date, calendar: buddhist) == "2026-11-10", "day key used non-Gregorian year")
+        let encoded = try JSONEncoder().encode(PlannerState(days: ["2026-11-10": [6: "early", 23: "late"]]))
+        let decoded = try JSONDecoder().decode(PlannerState.self, from: encoded)
+        try expect(decoded.days["2026-11-10"] == [6: "early", 23: "late"], "integer-hour JSON round trip")
+    })
+
+    record(await check("todo ordering and edits") {
+        var todos = TodoState()
+        try expect(todos.add(title: " \n ") == nil, "blank todo added")
+        let a = try require(todos.add(title: " A "), "A not added")
+        let b = try require(todos.add(title: "B"), "B not added")
+        try expect(todos.items.map(\.title) == ["A", "B"], "title trim or initial order")
+        todos.toggle(id: a.id)
+        let c = try require(todos.add(title: "C"), "C not added")
+        try expect(todos.items.map(\.id) == [b.id, c.id, a.id], "done item not below open items")
+        todos.toggle(id: b.id)
+        try expect(todos.items.map(\.id) == [c.id, b.id, a.id], "newly done item not first in done group")
+        todos.toggle(id: a.id)
+        try expect(todos.items.map(\.id) == [c.id, a.id, b.id], "reopened item not last in open group")
+        todos.rename(id: c.id, title: "  ")
+        try expect(todos.items[0].title == "C", "blank rename changed item")
+        todos.rename(id: c.id, title: " C2 ")
+        try expect(todos.items[0].title == "C2", "rename did not trim")
+        todos.delete(id: a.id)
+        try expect(todos.items.map(\.id) == [c.id, b.id], "delete failed")
+        let unsorted = TodoState(items: [TodoItem(title: "done", isDone: true), TodoItem(title: "open")])
+        try expect(unsorted.items.map(\.isDone) == [false, true], "initializer violated ordering")
+        let decoded = try JSONDecoder().decode(TodoState.self, from: JSONEncoder().encode(unsorted))
+        try expect(decoded == unsorted, "todo JSON round trip")
+    })
+
+    record(await check("PlanStore round trip and debounce") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let store = PlanStore(paths: paths, autosaveDelay: 0.15)
+        let plannerFile = paths.root.appendingPathComponent("planner.json")
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "first") }
+        try await Task.sleep(for: .milliseconds(75))
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "second") }
+        try await Task.sleep(for: .milliseconds(90))
+        try expect(!FileManager.default.fileExists(atPath: plannerFile.path), "planner saved before debounce ended")
+        store.updateTodos { _ = $0.add(title: "task") }
+        try await Task.sleep(for: .milliseconds(120))
+        try expect(store.flush().isEmpty, "PlanStore flush failed")
+        let restored = PlanStore(paths: paths)
+        try expect(restored.planner.entry(day: "2026-11-10", hour: 6) == "second", "planner did not round trip")
+        try expect(restored.todos.items.map(\.title) == ["task"], "todos did not round trip")
+    })
+
+    record(await check("PlanStore failures retry and report") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: paths.root.path); try? FileManager.default.removeItem(at: paths.root) }
+        let store = PlanStore(paths: paths, autosaveDelay: 0.05)
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "old") }
+        try expect(store.flush().isEmpty, "initial planner save failed")
+        let oldBytes = try Data(contentsOf: paths.root.appendingPathComponent("planner.json"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: paths.root.path)
+        store.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "retry") }
+        store.updateTodos { _ = $0.add(title: "retry") }
+        try await Task.sleep(for: .milliseconds(120))
+        try expect(Set(store.flush()) == Set(["planner.json", "todos.json"]), "failed file names not reported")
+        try expect(try Data(contentsOf: paths.root.appendingPathComponent("planner.json")) == oldBytes,
+                   "failed planner save changed previous file")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: paths.root.path)
+        try await Task.sleep(for: .milliseconds(1200))
+        try expect(store.flush().isEmpty, "retry remained pending")
+        let restored = PlanStore(paths: paths)
+        try expect(restored.planner.entry(day: "2026-11-10", hour: 6) == "retry", "planner retry failed")
+        try expect(restored.todos.items.map(\.title) == ["retry"], "todo retry failed")
+    })
+
+    record(await check("PlanStore corrupt backup and blocked files") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: paths.root.path); try? FileManager.default.removeItem(at: paths.root) }
+        let plannerFile = paths.root.appendingPathComponent("planner.json")
+        let todosFile = paths.root.appendingPathComponent("todos.json")
+        try Data("{broken".utf8).write(to: plannerFile)
+        let recovered = PlanStore(paths: paths)
+        try expect(recovered.planner.days.isEmpty, "corrupt planner not reset")
+        let backups = try FileManager.default.contentsOfDirectory(atPath: paths.root.path)
+        try expect(backups.contains(where: { $0.hasPrefix("planner.corrupt-") }), "corrupt planner not backed up")
+        recovered.updatePlanner { $0.setEntry(day: "2026-11-10", hour: 6, text: "new") }
+        try expect(recovered.flush().isEmpty, "backed-up planner stayed blocked")
+        try FileManager.default.createDirectory(at: todosFile, withIntermediateDirectories: false)
+        let unreadable = PlanStore(paths: paths)
+        try expect(unreadable.flush() == ["todos.json"], "unreadable todos not reported")
+        unreadable.updateTodos { _ = $0.add(title: "must not write") }
+        try expect(unreadable.flush() == ["todos.json"], "unreadable todos update not blocked")
+        try expect(FileManager.default.fileExists(atPath: todosFile.path), "unreadable todos moved")
+        try FileManager.default.removeItem(at: todosFile)
+        try Data("{broken".utf8).write(to: todosFile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: paths.root.path)
+        let unbacked = PlanStore(paths: paths)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: paths.root.path)
+        unbacked.updateTodos { _ = $0.add(title: "must not write") }
+        try expect(unbacked.flush() == ["todos.json"], "unbacked todos not reported")
+        try expect(try Data(contentsOf: todosFile) == Data("{broken".utf8), "unbacked todos overwritten")
     })
 
     record(await check("RTFD formatting and image round trip") {
@@ -354,6 +536,10 @@ private func run() async -> Int {
 private func require<T>(_ value: T?, _ message: String) throws -> T {
     guard let value else { throw CheckFailure(description: message) }
     return value
+}
+
+private func memoDocumentIDs(_ state: WorkspaceState) -> Set<UUID> {
+    Set(state.tabs.filter { $0.kind == .memo }.flatMap { $0.root.panes.map(\.documentID) })
 }
 
 @MainActor
