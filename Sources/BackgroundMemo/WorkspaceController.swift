@@ -180,15 +180,13 @@ final class WorkspaceController: NSObject, NSWindowDelegate {
 
     private func buildWindowContent() {
         let size = window.contentRect(forFrameRect: window.frame).size
-        let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: size))
-        glass.cornerRadius = 22
-        glass.style = .clear
-        glass.autoresizingMask = [.width, .height]
+        let backdrop = GlassBackdrop(frame: NSRect(origin: .zero, size: size))
+        backdrop.autoresizingMask = [.width, .height]
 
-        let root = WorkspaceRootView(frame: glass.bounds, tabBar: tabBar, splitContainer: splitContainer)
+        let root = WorkspaceRootView(frame: backdrop.bounds, tabBar: tabBar, splitContainer: splitContainer)
         root.autoresizingMask = [.width, .height]
-        glass.contentView = root
-        window.contentView = glass
+        backdrop.addSubview(root)
+        window.contentView = backdrop
     }
 
     private func wireViews() {
