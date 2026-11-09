@@ -257,7 +257,7 @@ private func run() async -> Int {
     record(await check("planner entries and Gregorian day key") {
         var planner = PlannerState()
         planner.setEntry(day: "2026-11-10", minute: 300, text: "ignored")
-        planner.setEntry(day: "2026-11-10", minute: 1440, text: "ignored")
+        planner.setEntry(day: "2026-11-10", minute: 1800, text: "ignored")
         try expect(planner.days.isEmpty, "out-of-range minute stored")
         planner.setEntry(day: "2026-11-10", minute: 360, text: "  morning  ")
         planner.setEntry(day: "2026-11-10", minute: 1380, text: "night")
@@ -712,15 +712,15 @@ private func run() async -> Int {
     })
 
     record(await check("planner slot range ignores non-slot values") {
-        try expect(PlannerState.slots.first == 360 && PlannerState.slots.last == 1430 && PlannerState.slots.count == 108, "slot range")
+        try expect(PlannerState.slots.first == 360 && PlannerState.slots.last == 1790 && PlannerState.slots.count == 144, "slot range")
         try expect(zip(PlannerState.slots, PlannerState.slots.dropFirst()).allSatisfy { $1 - $0 == 10 }, "slot spacing")
         var planner = PlannerState()
-        for minute in [6, 350, 355, 365, 1431, 1440, -10] {
+        for minute in [6, 350, 355, 365, 1791, 1800, -10] {
             planner.setEntry(day: "2026-11-10", minute: minute, text: "ignored")
         }
         try expect(planner.days.isEmpty, "non-slot value stored")
-        planner.setEntry(day: "2026-11-10", minute: 1430, text: "last")
-        try expect(planner.entry(day: "2026-11-10", minute: 1430) == "last", "last slot rejected")
+        planner.setEntry(day: "2026-11-10", minute: 1790, text: "last")
+        try expect(planner.entry(day: "2026-11-10", minute: 1790) == "last", "last slot rejected")
         let injected = PlannerState(days: ["2026-11-10": [365: "stray"]])
         try expect(injected.entry(day: "2026-11-10", minute: 365).isEmpty, "non-slot value read")
     })
@@ -859,17 +859,31 @@ private func run() async -> Int {
         try expect(planner.spans["2026-11-10"]?[640] == nil, "span with no room stored")
     })
 
-    record(await check("planner span stops at 23:50") {
+    record(await check("planner day starts at 06:00") {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+        func date(_ day: Int, _ hour: Int, _ minute: Int) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))!
+        }
+        try expect(PlannerState.plannerDate(for: date(11, 1, 0), calendar: calendar) == date(10, 0, 0), "01:00 belongs to the previous page")
+        try expect(PlannerState.plannerDate(for: date(11, 5, 59), calendar: calendar) == date(10, 0, 0), "05:59 belongs to the previous page")
+        try expect(PlannerState.plannerDate(for: date(11, 6, 0), calendar: calendar) == date(11, 0, 0), "06:00 starts the new page")
         var planner = PlannerState()
-        planner.setEntry(day: "2026-11-10", minute: 1410, text: "late")
-        planner.setSpan(day: "2026-11-10", minute: 1410, slots: 50)
-        try expect(planner.spans["2026-11-10"] == [1410: 3], "span passed 23:50")
-        try expect(planner.span(day: "2026-11-10", atSlot: 1430)?.isEnd == true, "23:50 not the end")
-        planner.setEntry(day: "2026-11-10", minute: 1430, text: "ignored because covered")
-        try expect(planner.entry(day: "2026-11-10", minute: 1430).isEmpty, "covered 23:50 written")
+        planner.setEntry(day: "2026-11-10", minute: 1440, text: "자정")
+        try expect(planner.entry(day: "2026-11-10", minute: 1440) == "자정", "00:00 slot rejected")
+    })
+
+    record(await check("planner span stops at 05:50") {
+        var planner = PlannerState()
+        planner.setEntry(day: "2026-11-10", minute: 1770, text: "late")
+        planner.setSpan(day: "2026-11-10", minute: 1770, slots: 50)
+        try expect(planner.spans["2026-11-10"] == [1770: 3], "span passed 05:50")
+        try expect(planner.span(day: "2026-11-10", atSlot: 1790)?.isEnd == true, "05:50 not the end")
+        planner.setEntry(day: "2026-11-10", minute: 1790, text: "ignored because covered")
+        try expect(planner.entry(day: "2026-11-10", minute: 1790).isEmpty, "covered 05:50 written")
         var last = PlannerState()
-        last.setEntry(day: "2026-11-10", minute: 1430, text: "last")
-        last.setSpan(day: "2026-11-10", minute: 1430, slots: 2)
+        last.setEntry(day: "2026-11-10", minute: 1790, text: "last")
+        last.setSpan(day: "2026-11-10", minute: 1790, slots: 2)
         try expect(last.spans.isEmpty, "span from the final slot stored")
     })
 

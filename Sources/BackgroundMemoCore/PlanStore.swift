@@ -26,11 +26,17 @@ public struct PlannerState: Codable, Equatable, Sendable {
         self.spans = spans
     }
 
-    /// Every 10 minutes from 06:00 through 23:50.
-    public static let slots = Array(stride(from: 360, through: 1430, by: 10))
+    /// Every 10 minutes from 06:00 through 05:50 the next morning. Minutes past midnight
+    /// continue from 1440, so a day's late-night plans stay on that day's page.
+    public static let slots = Array(stride(from: 360, through: 1790, by: 10))
 
     public static func isSlot(_ minute: Int) -> Bool {
-        (360...1430).contains(minute) && minute % 10 == 0
+        (360...1790).contains(minute) && minute % 10 == 0
+    }
+
+    /// The planner day starts at 06:00, so 01:00 still belongs to the previous date's page.
+    public static func plannerDate(for now: Date, calendar: Calendar = .current) -> Date {
+        calendar.startOfDay(for: calendar.date(byAdding: .minute, value: -360, to: now) ?? now)
     }
 
     /// Keys in this range are hours from files written before 10-minute slots.
@@ -102,10 +108,10 @@ public struct PlannerState: Codable, Equatable, Sendable {
         }
     }
 
-    /// The longest span starting at `minute`: up to just before the next slot with text, and through 23:50.
+    /// The longest span starting at `minute`: up to just before the next slot with text, and through 05:50 the next morning.
     public func maximumSpanSlots(day: String, minute: Int) -> Int {
         guard Self.isSlot(minute) else { return 0 }
-        let end = Self.slots.first { $0 > minute && hasText(day: day, minute: $0) } ?? 1440
+        let end = Self.slots.first { $0 > minute && hasText(day: day, minute: $0) } ?? 1800
         return (end - minute) / 10
     }
 

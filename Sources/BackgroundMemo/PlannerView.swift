@@ -64,11 +64,16 @@ final class PlannerView: NSView {
         addSubview(scrollView)
         // Always renders the page's own date, so a late response for another day cannot appear.
         timetableStore.onUpdate = { [weak self] in self?.refreshTimetable() }
-        show(date: Date())
+        show(date: Self.plannerToday())
 
+        // Midnight brings the new day's timetable; 06:00 turns the page.
         NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.calendarDayDidChange() }
         }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.calendarDayDidChange() }
+        }
+        scheduleRollover()
     }
 
     @available(*, unavailable)
@@ -129,7 +134,8 @@ final class PlannerView: NSView {
     private var initialScrollMinute: Int? {
         guard isShowingToday else { return Self.firstBellMinute }
         let now = calendar.dateComponents([.hour, .minute], from: Date())
-        let minute = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+        var minute = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+        if minute < 360 { minute += 1440 }
         let slot = minute - minute % 10
         return PlannerState.isSlot(slot) ? slot : nil
     }
@@ -264,7 +270,29 @@ final class PlannerView: NSView {
 
     @objc private func showPreviousDay() { shiftDay(by: -1) }
     @objc private func showNextDay() { shiftDay(by: 1) }
-    @objc private func showToday() { show(date: Date()) }
+    @objc private func showToday() { show(date: Self.plannerToday()) }
+
+    private static func plannerToday() -> Date { PlannerState.plannerDate(for: Date()) }
+
+    private var rolloverTimer: Timer?
+
+    /// Fires at the next 06:00, when the planner day changes, then re-arms.
+    private func scheduleRollover() {
+        rolloverTimer?.invalidate()
+        guard let next = calendar.nextDate(
+            after: Date(),
+            matching: DateComponents(hour: 6, minute: 0, second: 0),
+            matchingPolicy: .nextTime
+        ) else { return }
+        let timer = Timer(fire: next.addingTimeInterval(1), interval: 0, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.calendarDayDidChange()
+                self?.scheduleRollover()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        rolloverTimer = timer
+    }
 
     private func shiftDay(by delta: Int) {
         if let date = calendar.date(byAdding: .day, value: delta, to: displayedDate) {
@@ -279,7 +307,7 @@ final class PlannerView: NSView {
         hasDeferredRollover = false
         displayedDate = calendar.startOfDay(for: date)
         let day = PlannerState.dayKey(for: displayedDate)
-        isShowingToday = day == PlannerState.dayKey(for: Date())
+        isShowingToday = day == PlannerState.dayKey(for: Self.plannerToday())
         dateLabel.stringValue = dateFormatter.string(from: displayedDate)
         for row in rows {
             row.bind(day: day, text: planStore.planner.entry(day: day, minute: row.minute))
@@ -336,13 +364,15 @@ final class PlannerView: NSView {
         timetableStore.request(date: Date())
         guard isShowingToday else {
             // The page being viewed may have just become today.
-            isShowingToday = PlannerState.dayKey(for: displayedDate) == PlannerState.dayKey(for: Date())
+            isShowingToday = PlannerState.dayKey(for: displayedDate) == PlannerState.dayKey(for: Self.plannerToday())
             return
         }
+        // Midnight does not change the planner day, so the page stays until 06:00.
+        guard PlannerState.dayKey(for: displayedDate) != PlannerState.dayKey(for: Self.plannerToday()) else { return }
         if hasMarkedFieldText {
             hasDeferredRollover = true
         } else {
-            show(date: Date())
+            show(date: Self.plannerToday())
         }
     }
 
@@ -351,7 +381,7 @@ final class PlannerView: NSView {
         guard hasDeferredRollover else { return }
         Task { @MainActor [weak self] in
             guard let self, self.hasDeferredRollover, !self.hasMarkedFieldText else { return }
-            self.show(date: Date())
+            self.show(date: Self.plannerToday())
         }
     }
 }
@@ -383,7 +413,7 @@ private final class PlannerRow: NSView, NSTextFieldDelegate {
 
     init(minute: Int) {
         self.minute = minute
-        timeLabel = NSTextField(labelWithString: String(format: "%02d:%02d", minute / 60, minute % 60))
+        timeLabel = NSTextField(labelWithString: String(format: "%02d:%02d", minute % 1440 / 60, minute % 60))
         super.init(frame: .zero)
         timeLabel.textColor = NSColor.white.withAlphaComponent(minute % 60 == 0 ? 0.95 : 0.4)
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: minute % 60 == 0 ? .semibold : .regular)
