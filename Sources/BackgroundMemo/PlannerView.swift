@@ -299,7 +299,8 @@ private final class PlannerRow: NSView, NSTextFieldDelegate {
         var fieldX = timeLabel.frame.maxX + 8
         if !lessonLabel.isHidden {
             let available = max(0, bounds.width - fieldX - 8)
-            let width = min(ceil(lessonLabel.intrinsicContentSize.width), available / 2)
+            // A truncating label reports a shortened intrinsic width, so measure the full text.
+            let width = min(ceil(lessonLabel.attributedStringValue.size().width) + 6, available / 2)
             let height = ceil(lessonLabel.intrinsicContentSize.height)
             lessonLabel.frame = NSRect(x: fieldX, y: (bounds.height - height) / 2, width: width, height: height)
             fieldX = lessonLabel.frame.maxX + 8
