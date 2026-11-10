@@ -6,13 +6,21 @@ extension WorkspaceState {
         let pane = Pane()
         let tab = Tab(title: "메모 1", root: .pane(pane), focusedPaneID: pane.id)
         return WorkspaceState(version: 1, windowFrame: nil,
-                              tabs: [makeFixedTab(.planner), makeFixedTab(.todo), tab], selectedTabID: tab.id)
+                              tabs: fixedKinds.map(makeFixedTab) + [tab], selectedTabID: tab.id)
     }
+
+    /// Every fixed tab kind, in the order new workspaces show them.
+    private static let fixedKinds: [TabKind] = [.planner, .todo, .meal]
 
     private static func makeFixedTab(_ kind: TabKind) -> Tab {
         let pane = Pane()
-        return Tab(title: kind == .planner ? "계획" : "할 일", kind: kind,
-                   root: .pane(pane), focusedPaneID: pane.id)
+        let title = switch kind {
+        case .planner: "계획"
+        case .todo: "할 일"
+        case .meal: "급식"
+        case .memo: "메모"
+        }
+        return Tab(title: title, kind: kind, root: .pane(pane), focusedPaneID: pane.id)
     }
 
     public var selectedTab: Tab { tabs.first { $0.id == selectedTabID } ?? tabs[0] }
@@ -108,7 +116,8 @@ extension WorkspaceState {
         tabs[index].focusedPaneID = panes[next].id
     }
 
-    /// Adds whichever fixed tabs are missing, and drops duplicate fixed tabs beyond the first.
+    /// Adds whichever fixed tabs are missing after the last existing fixed tab (at the front when there is
+    /// none), and drops duplicate fixed tabs beyond the first. Other tabs keep their order.
     public mutating func ensureFixedTabs() {
         var seen: [TabKind: UUID] = [:]
         var retained: [Tab] = []
@@ -122,10 +131,9 @@ extension WorkspaceState {
                 retained.append(tab)
             }
         }
-        var missing: [Tab] = []
-        if seen[.planner] == nil { missing.append(Self.makeFixedTab(.planner)) }
-        if seen[.todo] == nil { missing.append(Self.makeFixedTab(.todo)) }
-        retained.insert(contentsOf: missing, at: 0)
+        let missing = Self.fixedKinds.filter { seen[$0] == nil }.map(Self.makeFixedTab)
+        let insertion = retained.lastIndex(where: { $0.kind != .memo }).map { $0 + 1 } ?? 0
+        retained.insert(contentsOf: missing, at: insertion)
         if !retained.contains(where: { $0.kind == .memo }) {
             let pane = Pane()
             retained.append(Tab(title: "메모 1", root: .pane(pane), focusedPaneID: pane.id))

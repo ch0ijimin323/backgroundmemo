@@ -129,6 +129,7 @@ private extension WorkspaceState {
               Set(tabs.map(\.id)).count == tabs.count else { return false }
         guard tabs.filter({ $0.kind == .planner }).count == 1,
               tabs.filter({ $0.kind == .todo }).count == 1,
+              tabs.filter({ $0.kind == .meal }).count == 1,
               tabs.contains(where: { $0.kind == .memo }) else { return false }
         let panes = tabs.flatMap { $0.root.panes }
         guard Set(panes.map(\.id)).count == panes.count,

@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             documentStore: DocumentStore(paths: paths),
             planStore: PlanStore(paths: paths),
             timetableStore: TimetableStore(paths: paths, apiKey: { neisKeyStore.key }),
+            mealStore: MealStore(paths: paths, apiKey: { neisKeyStore.key }),
             neisKeyStore: neisKeyStore
         )
         self.controller = controller

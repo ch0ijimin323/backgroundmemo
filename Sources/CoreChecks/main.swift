@@ -49,25 +49,26 @@ private func run() async -> Int {
         state.windowFrame = frame
         let old = state.selectedTab.root.panes[0]
         try expect(state.closePane(id: old.id) == .replacedLastTab(documentID: old.documentID), "last pane result")
-        try expect(state.tabs.count == 3 && state.selectedTab.root.panes.count == 1, "last memo was not replaced")
+        try expect(state.tabs.count == 4 && state.selectedTab.root.panes.count == 1, "last memo was not replaced")
         try expect(!state.allDocumentIDs.contains(old.documentID), "old document retained")
         try expect(state.windowFrame == frame, "closing last tab lost window frame")
         let second = state.addTab()
         let secondPane = second.root.panes[0]
         try expect(state.closePane(id: secondPane.id) == .closedTab(documentID: secondPane.documentID), "multi-tab last pane result")
-        try expect(state.tabs.count == 3 && state.selectedTab.kind == .memo, "invalid selection after tab close")
+        try expect(state.tabs.count == 4 && state.selectedTab.kind == .memo, "invalid selection after tab close")
     })
 
     record(await check("tab add move close") {
         var state = WorkspaceState.initial()
         let plannerID = state.tabs[0].id
         let todoID = state.tabs[1].id
+        let mealID = state.tabs[2].id
         let first = state.selectedTab.id
         let second = state.addTab()
         let third = state.addTab()
         try expect(second.title == "메모 2" && third.title == "메모 3", "tab titles")
-        state.moveTab(from: 4, to: 0)
-        try expect(state.tabs.map(\.id) == [third.id, plannerID, todoID, first, second.id], "tab move")
+        state.moveTab(from: 5, to: 0)
+        try expect(state.tabs.map(\.id) == [third.id, plannerID, todoID, mealID, first, second.id], "tab move")
         let documents = state.closeTab(id: third.id)
         try expect(documents.count == 1 && state.selectedTabID == first, "tab close selection")
         let replacement = state.addTab()
@@ -79,20 +80,25 @@ private func run() async -> Int {
 
     record(await check("fixed tab rules") {
         var state = WorkspaceState.initial()
-        try expect(state.tabs.map(\.kind) == [.planner, .todo, .memo], "initial tab kinds")
-        try expect(state.tabs.map(\.title) == ["계획", "할 일", "메모 1"], "initial titles")
+        try expect(state.tabs.map(\.kind) == [.planner, .todo, .meal, .memo], "initial tab kinds")
+        try expect(state.tabs.map(\.title) == ["계획", "할 일", "급식", "메모 1"], "initial titles")
         try expect(state.selectedTab.kind == .memo, "initial selection")
         let planner = state.tabs[0]
         let todo = state.tabs[1]
+        let meal = state.tabs[2]
         let old = state
         try expect(state.closeTab(id: planner.id).isEmpty, "planner closed")
         try expect(state.closePane(id: todo.root.panes[0].id) == .notFound, "todo pane closed")
         try expect(state.splitPane(id: planner.root.panes[0].id, axis: .horizontal) == nil, "planner split")
+        try expect(state.closeTab(id: meal.id).isEmpty, "meal closed")
+        try expect(state.closePane(id: meal.root.panes[0].id) == .notFound, "meal pane closed")
+        try expect(state.splitPane(id: meal.root.panes[0].id, axis: .vertical) == nil, "meal split")
         try expect(state == old, "fixed tab operation changed state")
-        state.moveTab(from: 0, to: 2)
-        try expect(state.tabs.map(\.kind) == [.todo, .memo, .planner], "fixed tab did not reorder")
+        state.moveTab(from: 0, to: 3)
+        state.moveTab(from: 1, to: 0)
+        try expect(state.tabs.map(\.kind) == [.meal, .todo, .memo, .planner], "fixed tab did not reorder")
         state.ensureFixedTabs()
-        try expect(state.tabs.map(\.kind) == [.todo, .memo, .planner], "ensureFixedTabs changed existing order")
+        try expect(state.tabs.map(\.kind) == [.meal, .todo, .memo, .planner], "ensureFixedTabs changed existing order")
         let memo = state.addTab()
         try expect(memo.title == "메모 2", "fixed titles affected memo numbering")
         try expect(state.tabs.filter { $0.kind == .memo }.count == 2, "memo tab not added")
@@ -116,8 +122,8 @@ private func run() async -> Int {
         let store = WorkspaceStore(paths: paths)
         let loaded = store.load()
         try expect(loaded.corruptBackup == nil && !loaded.saveBlocked, "legacy JSON treated as corrupt")
-        try expect(loaded.state.tabs.map(\.kind) == [.planner, .todo, .memo], "fixed tabs missing from migration")
-        try expect(loaded.state.tabs[2] == originalMemo, "legacy memo or split changed")
+        try expect(loaded.state.tabs.map(\.kind) == [.planner, .todo, .meal, .memo], "fixed tabs missing from migration")
+        try expect(loaded.state.tabs[3] == originalMemo, "legacy memo or split changed")
         try expect(loaded.state.windowFrame == frame && loaded.state.selectedTabID == originalMemo.id, "legacy frame or selection changed")
         try expect(store.load().state == loaded.state, "migrated workspace was not saved immediately")
         let documents = (try? FileManager.default.contentsOfDirectory(at: paths.documentsDirectory,
@@ -137,7 +143,7 @@ private func run() async -> Int {
         try JSONEncoder().encode(state).write(to: paths.workspaceFile)
         let loaded = WorkspaceStore(paths: paths).load()
         try expect(loaded.corruptBackup == nil, "duplicate fixed tab treated as corrupt")
-        try expect(loaded.state.tabs.map(\.kind) == [.planner, .todo, .memo], "duplicate fixed tab survived")
+        try expect(loaded.state.tabs.map(\.kind) == [.planner, .todo, .meal, .memo], "duplicate fixed tab survived")
         try expect(loaded.state.selectedTabID == original.id, "selected duplicate was not remapped")
     })
 
@@ -165,7 +171,7 @@ private func run() async -> Int {
         let paths = try temporaryPaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let store = WorkspaceStore(paths: paths)
-        try expect(store.load().state.tabs.count == 3, "missing workspace")
+        try expect(store.load().state.tabs.count == 4, "missing workspace")
         var state = WorkspaceState.initial()
         _ = state.splitPane(id: state.selectedTab.root.panes[0].id, axis: .horizontal)
         state.windowFrame = WindowFrame(x: 1, y: 2, width: 300, height: 400)
@@ -183,7 +189,7 @@ private func run() async -> Int {
         try Data("{broken".utf8).write(to: paths.workspaceFile)
         let loaded = WorkspaceStore(paths: paths).load()
         try expect(loaded.corruptBackup != nil, "no corrupt backup")
-        try expect(loaded.state.tabs.count == 4 && memoDocumentIDs(loaded.state) == Set([a, b]), "documents not recovered")
+        try expect(loaded.state.tabs.count == 5 && memoDocumentIDs(loaded.state) == Set([a, b]), "documents not recovered")
         try expect(FileManager.default.fileExists(atPath: loaded.corruptBackup!.path), "backup absent")
         try expect(!loaded.saveBlocked, "backed-up workspace blocked saving")
         try expect(memoDocumentIDs(WorkspaceStore(paths: paths).load().state) == Set([a, b]), "recovery was not saved immediately")
@@ -711,6 +717,220 @@ private func run() async -> Int {
         store.flush()
     })
 
+    record(await check("meal tab is added to a file saved before it existed") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        var older = WorkspaceState.initial()
+        older.tabs.removeAll { $0.kind == .meal }
+        let memoPane = older.tabs[2].root.panes[0]
+        _ = older.splitPane(id: memoPane.id, axis: .horizontal)
+        let second = older.addTab()
+        older.moveTab(from: 0, to: 1)
+        older.selectTab(id: older.tabs[0].id)
+        let documentID = memoPane.documentID
+        try DocumentStore(paths: paths).save(NSAttributedString(string: "memo text"), id: documentID)
+        try JSONEncoder().encode(older).write(to: paths.workspaceFile)
+
+        let store = WorkspaceStore(paths: paths)
+        let loaded = store.load()
+        try expect(loaded.corruptBackup == nil && !loaded.saveBlocked, "older file treated as corrupt")
+        try expect(loaded.state.tabs.map(\.kind) == [.todo, .planner, .meal, .memo, .memo], "meal tab not added after the fixed tabs")
+        try expect(loaded.state.tabs.filter { $0.kind != .meal } == older.tabs, "existing tabs changed")
+        try expect(loaded.state.tabs.last?.id == second.id, "memo order changed")
+        try expect(loaded.state.selectedTabID == older.selectedTabID, "selection changed")
+        try expect(loaded.state.tabs.first { $0.kind == .meal }?.title == "급식", "meal title")
+        try expect(store.load().state == loaded.state, "migrated workspace was not saved")
+        let text = try DocumentStore(paths: paths).load(id: documentID)
+        try expect(text.string == "memo text", "memo document lost")
+        var again = loaded.state
+        again.ensureFixedTabs()
+        try expect(again == loaded.state, "ensureFixedTabs not stable")
+    })
+
+    record(await check("meal parses a normal response") {
+        let day = try NEISMeal.parse(Data(sampleMealJSON.utf8), ymd: "20261110")
+        try expect(day.meals.map(\.kind) == [.breakfast, .lunch, .dinner], "meal kinds")
+        try expect(day.meal(.breakfast)?.calories == "658.6 Kcal", "calories kept as text")
+        try expect(day.meal(.breakfast)?.dishes == ["백미밥", "북어미역국", "카다아프멸치볶음", "돈육고추장불고기", "백김치", "짜먹는요거트"], "breakfast dishes")
+        try expect(day.meal(.lunch)?.dishes == ["가바찰현미밥", "몽글몽글순두부", "잠봉샐러드&오리엔탈D"], "lunch dishes")
+        try expect(day.meal(.dinner)?.dishes == ["잡곡밥", "물떡꼬치어묵탕"], "dinner dishes")
+        try expect(day.meal(.dinner)?.calories == "1059.6 Kcal", "dinner calories")
+    })
+
+    record(await check("meal removes allergy numbers and keeps other parentheses") {
+        let text = "  우동(대) (1.5.6) <br/>김치  볶음밥 (5.)<br/> <br/>(2.5)<br/>요구르트(소)<br>사과 (과일)<br />떡   (13)(9)"
+        try expect(NEISMeal.dishes(from: text) == ["우동(대)", "김치 볶음밥", "요구르트(소)", "사과 (과일)", "떡"], "dishes \(NEISMeal.dishes(from: text))")
+        try expect(NEISMeal.dishes(from: "") == [], "empty text")
+        try expect(NEISMeal.dishes(from: "버섯(1.a)") == ["버섯(1.a)"], "mixed parentheses removed")
+    })
+
+    record(await check("meal maps codes, sorts, and keeps the first duplicate") {
+        let rows = [
+            mealRow(code: "3", dishes: "저녁"),
+            mealRow(code: "1", dishes: "아침"),
+            mealRow(code: "2", dishes: "점심"),
+            mealRow(code: "1", dishes: "중복"),
+            mealRow(code: "4", dishes: "간식"),
+        ]
+        let day = try NEISMeal.parse(Data(mealJSON(rows).utf8), ymd: "20261110")
+        try expect(day.meals.map(\.kind) == [.breakfast, .lunch, .dinner], "order")
+        try expect(day.meals.map(\.dishes) == [["아침"], ["점심"], ["저녁"]], "first duplicate")
+        try expect(MealKind.allCases.map(\.title) == ["조식", "중식", "석식"], "titles")
+        let lunchOnly = try NEISMeal.parse(Data(mealJSON([mealRow(code: "2", dishes: "점심")]).utf8))
+        try expect(lunchOnly.meal(.breakfast) == nil && lunchOnly.meal(.lunch) != nil, "missing meal invented")
+    })
+
+    record(await check("meal INFO-200 means no meals") {
+        try expect(try NEISMeal.parse(Data(#"{"RESULT":{"CODE":"INFO-200","MESSAGE":"none"}}"#.utf8)) == MealDay(), "top-level INFO-200")
+        let head = Data(#"{"mealServiceDietInfo":[{"head":[{"list_total_count":0},{"RESULT":{"CODE":"INFO-200"}}]}]}"#.utf8)
+        try expect(try NEISMeal.parse(head) == MealDay(), "head INFO-200")
+    })
+
+    record(await check("meal ERROR responses fail") {
+        try expect(mealParseError(Data(#"{"RESULT":{"CODE":"ERROR-300","MESSAGE":"bad"}}"#.utf8)) == .api(code: "ERROR-300"), "top-level error")
+        try expect(mealParseError(Data(#"{"RESULT":{"CODE":"INFO-300","MESSAGE":"bad"}}"#.utf8)) == .api(code: "INFO-300"), "non-200 INFO code")
+        let head = Data(#"{"mealServiceDietInfo":[{"head":[{"list_total_count":1},{"RESULT":{"CODE":"ERROR-500"}}]}]}"#.utf8)
+        try expect(mealParseError(head) == .api(code: "ERROR-500"), "head error")
+    })
+
+    record(await check("meal broken JSON fails") {
+        try expect(mealParseError(Data("{broken".utf8)) == .malformedResponse, "broken JSON")
+        try expect(mealParseError(Data("[]".utf8)) == .malformedResponse, "wrong root")
+        try expect(mealParseError(Data(#"{"hisTimetable":[{"head":[{"RESULT":{"CODE":"INFO-000"}}]}]}"#.utf8)) == .malformedResponse, "other service")
+        try expect(mealParseError(Data(#"{"mealServiceDietInfo":[{"head":[{"RESULT":{"CODE":"INFO-000"}}]}]}"#.utf8)) == .malformedResponse, "missing rows")
+        try expect(mealParseError(Data(mealJSON([mealRow(code: "점심", dishes: "밥")]).utf8)) == .malformedResponse, "bad code")
+    })
+
+    record(await check("meal rejects rows for another day or without a date") {
+        let other = mealJSON([mealRow(code: "2", dishes: "밥", ymd: "20261111")])
+        let missing = mealJSON([#"{"MMEAL_SC_CODE":"2","CAL_INFO":"1 Kcal","DDISH_NM":"밥"}"#])
+        let mixed = mealJSON([mealRow(code: "1", dishes: "밥"), mealRow(code: "2", dishes: "국", ymd: "20261109")])
+        for body in [other, missing, mixed] {
+            do {
+                _ = try NEISMeal.parse(Data(body.utf8), ymd: "20261110")
+                throw CheckFailure(description: "expected malformed response")
+            } catch TimetableError.malformedResponse {}
+        }
+    })
+
+    record(await check("meal request asks for one day including weekends") {
+        let keyless = queryItems(try require(NEISMeal.requestURL(dayKey: "2026-11-14", apiKey: nil), "no URL"))
+        try expect(keyless["pSize"] == "5" && keyless["pIndex"] == "1" && keyless["Type"] == "json" && keyless["KEY"] == nil, "keyless query")
+        try expect(keyless["MLSV_FROM_YMD"] == "20261114" && keyless["MLSV_TO_YMD"] == "20261114", "single day")
+        try expect(keyless["ATPT_OFCDC_SC_CODE"] == "G10" && keyless["SD_SCHUL_CODE"] == "7430310", "school")
+        let keyed = queryItems(try require(NEISMeal.requestURL(dayKey: "2026-11-14", apiKey: " abc "), "no URL"))
+        try expect(keyed["pSize"] == "5" && keyed["KEY"] == "abc", "keyed query")
+        try expect(queryItems(try require(NEISMeal.requestURL(dayKey: "2026-11-14", apiKey: "  "), "no URL"))["KEY"] == nil, "blank key used")
+
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let counter = RequestCounter()
+        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in
+            counter.increment()
+            return (Data(mealJSON([mealRow(code: "2", dishes: "주말 점심", ymd: "20261114")]).utf8), 200)
+        })
+        let saturday = try gregorianDate(2026, 11, 14)
+        store.request(date: saturday)
+        store.request(date: saturday)
+        try await waitUntilMealSettled(store, saturday)
+        store.request(date: saturday)
+        try await Task.sleep(for: .milliseconds(20))
+        try expect(counter.count == 1, "fetched \(counter.count) times")
+        try expect(store.snapshot(for: saturday) == MealSnapshot(day: MealDay(meals: [Meal(kind: .lunch, calories: "1 Kcal", dishes: ["주말 점심"])]), status: .loaded), "weekend meal")
+        store.flush()
+    })
+
+    record(await check("meal failures never overwrite the cache") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let date = try gregorianDate(2026, 11, 10)
+        let good = Data(sampleMealJSON.utf8)
+        let first = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (good, 200) })
+        first.request(date: date)
+        try await waitUntilMealSettled(first, date)
+        first.flush()
+        let file = paths.root.appendingPathComponent("meals.json")
+        try await waitForFile(file)
+        let saved = try Data(contentsOf: file)
+        let expected = try NEISMeal.parse(good, ymd: "20261110")
+
+        let failures: [TimetableTransport] = [
+            { _ in (Data("{broken".utf8), 200) },
+            { _ in (Data(#"{"RESULT":{"CODE":"ERROR-300"}}"#.utf8), 200) },
+            { _ in (Data(mealJSON([mealRow(code: "2", dishes: "다른 날", ymd: "20261111")]).utf8), 200) },
+            { _ in (good, 500) },
+            { _ in throw URLError(.notConnectedToInternet) },
+        ]
+        for transport in failures {
+            let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+            try expect(store.snapshot(for: date) == MealSnapshot(day: expected, status: .loaded), "cache not loaded")
+            store.request(date: date)
+            try await waitUntilMealSettled(store, date)
+            let snapshot = store.snapshot(for: date)
+            try expect(snapshot.status == .failed && snapshot.day == expected, "cache not shown after failure")
+            store.flush()
+            try await Task.sleep(for: .milliseconds(20))
+            try expect(try Data(contentsOf: file) == saved, "failure rewrote the cache")
+        }
+        let empty = MealStore(paths: try temporaryPaths(), autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (Data(), 500) })
+        empty.request(date: date)
+        try await waitUntilMealSettled(empty, date)
+        try expect(empty.snapshot(for: date) == MealSnapshot(day: nil, status: .failed), "failure without cache")
+    })
+
+    record(await check("meal waits before retrying a failed day") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let counter = RequestCounter()
+        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 60, apiKey: { nil }, transport: { _ in
+            counter.increment()
+            return (Data(), 500)
+        })
+        let date = try gregorianDate(2026, 11, 10)
+        store.request(date: date)
+        try await waitUntilMealSettled(store, date)
+        store.request(date: date)
+        try await Task.sleep(for: .milliseconds(50))
+        try expect(counter.count == 1, "retried within the cooldown: \(counter.count)")
+        try expect(store.snapshot(for: date).status == .failed, "failure state lost")
+    })
+
+    record(await check("meal late response stays on its own day") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { url in
+            let isMonday = url.query?.contains("MLSV_FROM_YMD=20261109") == true
+            if isMonday { try await Task.sleep(for: .milliseconds(60)) }
+            let ymd = isMonday ? "20261109" : "20261110"
+            return (Data(mealJSON([mealRow(code: "2", dishes: isMonday ? "월요일" : "화요일", ymd: ymd)]).utf8), 200)
+        })
+        let monday = try gregorianDate(2026, 11, 9)
+        let tuesday = try gregorianDate(2026, 11, 10)
+        store.request(date: monday)
+        store.request(date: tuesday)
+        try await waitUntilMealSettled(store, tuesday)
+        try expect(store.snapshot(for: monday).status == .loading, "Monday finished early")
+        try await waitUntilMealSettled(store, monday)
+        try expect(store.snapshot(for: tuesday).day?.meal(.lunch)?.dishes == ["화요일"], "Tuesday overwritten")
+        try expect(store.snapshot(for: monday).day?.meal(.lunch)?.dishes == ["월요일"], "Monday lost")
+        store.flush()
+    })
+
+    record(await check("unreadable meals.json is never overwritten") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let file = paths.root.appendingPathComponent("meals.json")
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (Data(sampleMealJSON.utf8), 200) })
+        let date = try gregorianDate(2026, 11, 10)
+        store.request(date: date)
+        try await waitUntilMealSettled(store, date)
+        store.flush()
+        var isDirectory: ObjCBool = false
+        try expect(FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory) && isDirectory.boolValue, "unreadable file replaced")
+        try expect(store.snapshot(for: date).day?.meals.count == 3, "fetched meals not shown")
+    })
+
     record(await check("planner slot range ignores non-slot values") {
         try expect(PlannerState.slots.first == 360 && PlannerState.slots.last == 1790 && PlannerState.slots.count == 144, "slot range")
         try expect(zip(PlannerState.slots, PlannerState.slots.dropFirst()).allSatisfy { $1 - $0 == 10 }, "slot spacing")
@@ -968,6 +1188,34 @@ private func parseError(_ data: Data) -> TimetableError? {
     } catch {
         return error as? TimetableError
     }
+}
+
+private let sampleMealJSON = #"{"mealServiceDietInfo":[{"head":[{"list_total_count":3},{"RESULT":{"CODE":"INFO-000","MESSAGE":"정상 처리되었습니다."}}]},{"row":[{"MLSV_YMD":"20261110","MMEAL_SC_CODE":"1","MMEAL_SC_NM":"조식","CAL_INFO":"658.6 Kcal","DDISH_NM":"백미밥 <br/>북어미역국 (5.6)<br/>카다아프멸치볶음 (13)<br/>돈육고추장불고기 (10)<br/>백김치 (9)<br/>짜먹는요거트 (2)"},{"MLSV_YMD":"20261110","MMEAL_SC_CODE":"2","MMEAL_SC_NM":"중식","CAL_INFO":"1067.5 Kcal","DDISH_NM":"가바찰현미밥 <br/>몽글몽글순두부 (5)<br/>잠봉샐러드&오리엔탈D (1.2.5.6.10.12.15.16)"},{"MLSV_YMD":"20261110","MMEAL_SC_CODE":"3","MMEAL_SC_NM":"석식","CAL_INFO":"1059.6 Kcal","DDISH_NM":"잡곡밥 (5)<br/>물떡꼬치어묵탕 (1.5.6.13)"}]}]}"#
+
+private func mealRow(code: String, dishes: String, ymd: String = "20261110") -> String {
+    #"{"MLSV_YMD":"\#(ymd)","MMEAL_SC_CODE":"\#(code)","CAL_INFO":"1 Kcal","DDISH_NM":"\#(dishes)"}"#
+}
+
+private func mealJSON(_ rows: [String]) -> String {
+    #"{"mealServiceDietInfo":[{"head":[{"list_total_count":\#(rows.count)},{"RESULT":{"CODE":"INFO-000","MESSAGE":"ok"}}]},{"row":[\#(rows.joined(separator: ","))]}]}"#
+}
+
+private func mealParseError(_ data: Data) -> TimetableError? {
+    do {
+        _ = try NEISMeal.parse(data)
+        return nil
+    } catch {
+        return error as? TimetableError
+    }
+}
+
+@MainActor
+private func waitUntilMealSettled(_ store: MealStore, _ date: Date) async throws {
+    for _ in 0..<300 {
+        try await Task.sleep(for: .milliseconds(10))
+        if store.snapshot(for: date).status != .loading { return }
+    }
+    throw CheckFailure(description: "meal request did not finish")
 }
 
 private func queryItems(_ url: URL) -> [String: String] {

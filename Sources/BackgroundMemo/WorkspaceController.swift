@@ -10,6 +10,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
     private let documentStore: DocumentStore
     private let planStore: PlanStore
     private let timetableStore: TimetableStore
+    private let mealStore: MealStore
     private let neisKeyStore: NEISKeyStore
     private var state: WorkspaceState
 
@@ -18,6 +19,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
     private let splitContainer = SplitContainerView()
     private let plannerView: PlannerView
     private let todoView: TodoView
+    private let mealView: MealView
 
     /// Views for every pane opened so far, including those in background tabs.
     private var paneViews: [UUID: PaneView] = [:]
@@ -29,15 +31,18 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         documentStore: DocumentStore,
         planStore: PlanStore,
         timetableStore: TimetableStore,
+        mealStore: MealStore,
         neisKeyStore: NEISKeyStore
     ) {
         self.workspaceStore = workspaceStore
         self.documentStore = documentStore
         self.planStore = planStore
         self.timetableStore = timetableStore
+        self.mealStore = mealStore
         self.neisKeyStore = neisKeyStore
         plannerView = PlannerView(planStore: planStore, timetableStore: timetableStore)
         todoView = TodoView(planStore: planStore)
+        mealView = MealView(mealStore: mealStore)
         let loaded = workspaceStore.load()
         state = loaded.state
         window = DesktopWindow(contentRect: WindowPlacement.initialFrame(saved: loaded.state.windowFrame))
@@ -78,6 +83,8 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         workspaceSaveTask?.cancel()
         saveWorkspaceNow()
         timetableStore.flush()
+        // Logged only inside the store; meals can be fetched again.
+        mealStore.flush()
         return SaveFailures(documents: documentStore.flush(), planFiles: planStore.flush())
     }
 
@@ -246,7 +253,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         let root = WorkspaceRootView(
             frame: backdrop.bounds,
             tabBar: tabBar,
-            contentViews: [splitContainer, plannerView, todoView]
+            contentViews: [splitContainer, plannerView, todoView, mealView]
         )
         root.autoresizingMask = [.width, .height]
         backdrop.addSubview(root)
@@ -298,6 +305,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         splitContainer.isHidden = kind != .memo
         plannerView.isHidden = kind != .planner
         todoView.isHidden = kind != .todo
+        mealView.isHidden = kind != .meal
         MainMenu.setFontMenuEnabled(kind == .memo)
     }
 
@@ -319,7 +327,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         switch state.selectedTab.kind {
         case .memo:
             focusMemoPane()
-        case .planner:
+        case .planner, .meal:
             if tabBar.isRenaming { window.makeFirstResponder(nil) }
         case .todo:
             todoView.focusInput()
