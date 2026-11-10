@@ -18,6 +18,8 @@ Requires macOS 26 or later on Apple Silicon.
 2. Open the app. macOS blocks the first launch because the app is not notarized.
 3. Open System Settings > Privacy & Security and choose **Open Anyway**.
 
+Clicking the memo or its Dock icon brings it in front of other windows until you switch to another app. To keep it on the desktop at all times, turn off **클릭하면 맨 앞으로** in the BackgroundMemo menu.
+
 To start it at login, enable **로그인 시 자동 실행** in the BackgroundMemo menu.
 
 ## Choose your school

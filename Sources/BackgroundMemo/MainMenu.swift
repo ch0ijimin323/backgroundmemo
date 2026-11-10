@@ -33,6 +33,7 @@ enum MainMenu {
         let menu = NSMenu(title: "BackgroundMemo")
         menu.add("학교 설정…", #selector(WorkspaceController.showSchoolSettings(_:)), key: ",", target: controller)
         menu.addItem(.separator())
+        menu.add("클릭하면 맨 앞으로", #selector(BringToFrontToggle.toggle(_:)), key: "", target: BringToFrontToggle.shared)
         menu.add("로그인 시 자동 실행", #selector(LoginItemToggle.toggle(_:)), key: "", target: LoginItemToggle.shared)
         menu.addItem(.separator())
         menu.add("BackgroundMemo 종료", #selector(NSApplication.terminate(_:)), key: "q", target: NSApp)

@@ -14,7 +14,7 @@ Success means the author can keep it on the desktop every day: it stays behind o
 | Stack | Swift, AppKit-first, SwiftUI only for a settings screen if one is needed |
 | Build | Swift Package plus a script that assembles the `.app` (Xcode is not installed) |
 | Window | One borderless window |
-| Layer | Above desktop icons, below normal app windows; never comes forward |
+| Layer | Above desktop icons, below normal app windows; rises to the front while the app is active (`클릭하면 맨 앞으로`, on by default) |
 | Spaces | Visible on all desktops; not shown over full-screen apps |
 | Displays | Shown on one display in v1 |
 | Material | Liquid Glass, matching the reference: clear wallpaper show-through, thin bright edge, rounded corners, pill tab bar |
@@ -29,7 +29,7 @@ Always-on-top or hotkey summon, separate notes per Space, multiple displays, Mar
 
 ## Window behavior
 
-- The window sits one level above the desktop icon level and below normal windows. It covers any desktop icons beneath it, so clicks inside it never reach them.
+- The window sits one level above the desktop icon level and below normal windows. It covers any desktop icons beneath it, so clicks inside it never reach them. With BackgroundMemo > `클릭하면 맨 앞으로` on (the default, stored in UserDefaults `bringToFrontWhenActive`), the window moves to the normal window level while the app is active, so clicking it or its Dock icon brings it in front of other windows; when another app becomes active it returns to the desktop level. With the setting off it always stays at the desktop level.
 - Collection behavior: joins all Spaces, stationary, excluded from window cycling.
 - Dragging an empty part of the tab bar moves the window. Dragging an edge resizes it.
 - Clicking activates the app and focuses the pane without raising the window.
