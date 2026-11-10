@@ -8,7 +8,8 @@ final class PlannerView: NSView {
     private static let gridInset: CGFloat = 8
     private static let headerHeight: CGFloat = 36
     private static let statusLineHeight: CGFloat = 18
-    private static let firstBellMinute = 8 * 60 + 40
+    /// Where other days open when no school is set.
+    private static let defaultFirstBellMinute = 8 * 60 + 40
     private static let autoscrollEdge: CGFloat = 24
     private static let autoscrollStep: CGFloat = 12
 
@@ -27,6 +28,7 @@ final class PlannerView: NSView {
     private let nextButton = TabBarView.makeSymbolButton(symbol: "chevron.right", fallback: "›", label: "다음 날")
     private let todayButton = NSButton(title: "", target: nil, action: nil)
     private let dateLabel = NSTextField(labelWithString: "")
+    private let schoolLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let document = FlippedView()
     private let scrollView: NSScrollView
@@ -96,6 +98,7 @@ final class PlannerView: NSView {
         )
         nextButton.frame = NSRect(x: dateLabel.frame.maxX + 6, y: middle, width: buttonSize, height: buttonSize)
         todayButton.frame = NSRect(x: bounds.width - 54, y: middle, width: 50, height: buttonSize)
+        schoolLabel.layoutInHeader(after: nextButton.frame, before: todayButton.frame, headerHeight: Self.headerHeight)
 
         let statusHeight = statusLabel.isHidden ? 0 : Self.statusLineHeight
         statusLabel.frame = NSRect(x: 8, y: Self.headerHeight, width: max(0, bounds.width - 16), height: statusHeight)
@@ -132,7 +135,7 @@ final class PlannerView: NSView {
 
     /// Today opens at the current time, or the top outside the slot range; other days at the first bell.
     private var initialScrollMinute: Int? {
-        guard isShowingToday else { return Self.firstBellMinute }
+        guard isShowingToday else { return firstBellSlot }
         let now = calendar.dateComponents([.hour, .minute], from: Date())
         var minute = (now.hour ?? 0) * 60 + (now.minute ?? 0)
         if minute < 360 { minute += 1440 }
@@ -154,7 +157,28 @@ final class PlannerView: NSView {
         todayButton.action = #selector(showToday)
         dateLabel.textColor = .white
         dateLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        [previousButton, dateLabel, nextButton, todayButton].forEach(addSubview)
+        schoolLabel.configureAsSchoolLabel()
+        [previousButton, dateLabel, nextButton, schoolLabel, todayButton].forEach(addSubview)
+        updateSchoolLabel()
+    }
+
+    /// The first period's slot, so other days open at the start of school.
+    private var firstBellSlot: Int {
+        guard let first = timetableStore.settings?.periodStartMinutes.min() else { return Self.defaultFirstBellMinute }
+        let slot = first - first % 10
+        return PlannerState.isSlot(slot) ? slot : Self.defaultFirstBellMinute
+    }
+
+    private func updateSchoolLabel() {
+        schoolLabel.stringValue = timetableStore.settings.map { "\($0.schoolName) \($0.classTitle)" } ?? ""
+        needsLayout = true
+    }
+
+    /// The controller has given the store new settings. Reloads the page's classes and bell times.
+    func schoolSettingsDidChange() {
+        updateSchoolLabel()
+        timetableStore.request(date: displayedDate)
+        refreshTimetable()
     }
 
     private func buildRows() {
@@ -329,10 +353,11 @@ final class PlannerView: NSView {
         hasDeferredTimetableRefresh = false
         let snapshot = timetableStore.snapshot(for: displayedDate)
         let day = snapshot.day ?? TimetableDay()
+        let bell = timetableStore.settings.map(SchoolBell.init(settings:))
         for row in rows {
-            row.setLesson(SchoolBell.lesson(atSlot: row.minute, in: day))
+            row.setLesson(bell?.lesson(atSlot: row.minute, in: day))
         }
-        let status = Self.statusText(for: snapshot)
+        let status = Self.statusText(for: snapshot, kind: timetableStore.settings?.kind)
         statusLabel.stringValue = status
         statusLabel.isHidden = status.isEmpty
         needsLayout = true
@@ -342,13 +367,18 @@ final class PlannerView: NSView {
         if hasDeferredTimetableRefresh { refreshTimetable() }
     }
 
-    private static func statusText(for snapshot: TimetableSnapshot) -> String {
+    private static func statusText(for snapshot: TimetableSnapshot, kind: SchoolKind?) -> String {
         var parts: [String] = []
         switch (snapshot.status, snapshot.day) {
+        case (.unconfigured, _): return "학교를 설정하면 시간표가 표시됩니다 · BackgroundMemo 메뉴 › 학교 설정…"
         case (.failed, nil): parts.append("시간표를 불러오지 못했습니다")
         case (.failed, _): parts.append("시간표를 불러오지 못했습니다 · 저장된 시간표 표시 중")
         case (.loading, nil): parts.append("시간표를 불러오는 중…")
         default: break
+        }
+        // Special schools and others are asked through the high school service, which may not list them.
+        if snapshot.status == .failed, kind == .other {
+            parts.append("이 학교 종류는 고등학교 시간표로 조회하므로 시간표가 없을 수 있습니다")
         }
         if snapshot.day?.isPartial == true {
             parts.append("일부 교시만 표시 중 · 인증키를 입력하면 전체 표시")

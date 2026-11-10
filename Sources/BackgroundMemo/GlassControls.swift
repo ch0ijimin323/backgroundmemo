@@ -76,3 +76,22 @@ extension NSView {
         return activeFieldEditor == nil
     }
 }
+
+extension NSTextField {
+    /// The small school and class line in a fixed tab's header.
+    func configureAsSchoolLabel() {
+        textColor = NSColor.white.withAlphaComponent(0.55)
+        font = .systemFont(ofSize: 11)
+        lineBreakMode = .byTruncatingTail
+        alignment = .right
+    }
+
+    /// Between the date controls and the 오늘 button, hidden when there is no room.
+    func layoutInHeader(after leading: NSRect, before trailing: NSRect, headerHeight: CGFloat) {
+        let x = leading.maxX + 12
+        let width = trailing.minX - 8 - x
+        let height = ceil(intrinsicContentSize.height)
+        isHidden = stringValue.isEmpty || width < 60
+        frame = NSRect(x: x, y: (headerHeight - height) / 2, width: max(0, width), height: height)
+    }
+}

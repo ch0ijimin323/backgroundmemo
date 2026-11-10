@@ -29,30 +29,39 @@ public enum TimetableError: Error, Equatable, Sendable {
     case api(code: String)
 }
 
-/// The fixed NEIS query for this school and class.
+/// The NEIS timetable query for the configured school and class.
 public enum NEISTimetable {
-    public static let endpoint = "https://open.neis.go.kr/hub/hisTimetable"
-    public static let officeCode = "G10"
-    public static let schoolCode = "7430310"
-    public static let grade = "1"
-    public static let classNumber = "1"
     /// The API's limit for callers without a key. Requests stay within it; they are never split or paged.
     public static let pageSizeWithoutKey = 5
     public static let pageSizeWithKey = 30
 
+    /// High schools use `hisTimetable`, middle schools `misTimetable`, and elementary schools
+    /// `elsTimetable`. Other schools, such as special schools, try `hisTimetable`.
+    public static func service(for kind: SchoolKind) -> String {
+        switch kind {
+        case .elementary: "elsTimetable"
+        case .middle: "misTimetable"
+        case .high, .other: "hisTimetable"
+        }
+    }
+
+    public static func endpoint(for kind: SchoolKind) -> String {
+        "https://open.neis.go.kr/hub/\(service(for: kind))"
+    }
+
     /// One day, always the first page. `dayKey` is "yyyy-MM-dd".
-    public static func requestURL(dayKey: String, apiKey: String?) -> URL? {
+    public static func requestURL(settings: SchoolSettings, dayKey: String, apiKey: String?) -> URL? {
         let ymd = dayKey.replacingOccurrences(of: "-", with: "")
         let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        var components = URLComponents(string: endpoint)
+        var components = URLComponents(string: endpoint(for: settings.kind))
         var items = [
             URLQueryItem(name: "Type", value: "json"),
             URLQueryItem(name: "pIndex", value: "1"),
             URLQueryItem(name: "pSize", value: String(key.isEmpty ? pageSizeWithoutKey : pageSizeWithKey)),
-            URLQueryItem(name: "ATPT_OFCDC_SC_CODE", value: officeCode),
-            URLQueryItem(name: "SD_SCHUL_CODE", value: schoolCode),
-            URLQueryItem(name: "GRADE", value: grade),
-            URLQueryItem(name: "CLASS_NM", value: classNumber),
+            URLQueryItem(name: "ATPT_OFCDC_SC_CODE", value: settings.officeCode),
+            URLQueryItem(name: "SD_SCHUL_CODE", value: settings.schoolCode),
+            URLQueryItem(name: "GRADE", value: String(settings.grade)),
+            URLQueryItem(name: "CLASS_NM", value: settings.className),
             URLQueryItem(name: "TI_FROM_YMD", value: ymd),
             URLQueryItem(name: "TI_TO_YMD", value: ymd),
         ]
@@ -70,8 +79,9 @@ public enum NEISTimetable {
 
     /// Parses a response body. INFO-200 is a valid empty day; anything else unexpected throws.
     /// When `ymd` ("yyyyMMdd") is given, rows dated otherwise are ignored.
-    public static func parse(_ data: Data, ymd: String? = nil) throws -> TimetableDay {
-        guard let page = try NEISResponse.page(data, service: "hisTimetable") else { return TimetableDay() }
+    /// `service` is the envelope name, from `service(for:)`.
+    public static func parse(_ data: Data, service: String = "hisTimetable", ymd: String? = nil) throws -> TimetableDay {
+        guard let page = try NEISResponse.page(data, service: service) else { return TimetableDay() }
         let rows = page.rows
 
         var subjects: [Int: String] = [:]
@@ -153,6 +163,8 @@ public enum TimetableStatus: Equatable, Sendable {
     case loading
     case loaded
     case failed
+    /// No school is set, so nothing is requested.
+    case unconfigured
 }
 
 public struct TimetableSnapshot: Equatable, Sendable {
@@ -166,11 +178,36 @@ public struct TimetableSnapshot: Equatable, Sendable {
 }
 
 struct TimetableCache: Codable, Equatable {
+    /// `SchoolSettings.timetableIdentity` of the class these days belong to.
+    var identity: String?
     var days: [String: TimetableDay] = [:]
+
+    init(identity: String?, days: [String: TimetableDay] = [:]) {
+        self.identity = identity
+        self.days = days
+    }
+
+    private enum CodingKeys: String, CodingKey { case identity, days }
+
+    /// Files written before settings existed hold the old fixed class.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        identity = container.contains(.identity)
+            ? try container.decodeIfPresent(String.self, forKey: .identity)
+            : SchoolSettings.legacyDefault.timetableIdentity
+        days = try container.decode([String: TimetableDay].self, forKey: .days)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(identity, forKey: .identity)
+        try container.encode(days, forKey: .days)
+    }
 }
 
-/// Fetches and caches one day at a time in timetable.json under `AppPaths.root`.
-/// A failed fetch never changes the cache. Save failures are logged and retried, and never block quitting.
+/// Fetches and caches one day at a time in timetable.json under `AppPaths.root`, for the class in the
+/// injected settings. A failed fetch never changes the cache. Save failures are logged and retried,
+/// and never block quitting. A cache saved for another class is ignored.
 @MainActor
 public final class TimetableStore {
     private static let logger = Logger(subsystem: "BackgroundMemo", category: "TimetableStore")
@@ -188,6 +225,7 @@ public final class TimetableStore {
     private let transport: TimetableTransport
     private let failureCooldown: TimeInterval
 
+    public private(set) var settings: SchoolSettings?
     private var cache: TimetableCache
     private var fetchedThisSession: Set<String> = []
     private var failedDays: Set<String> = []
@@ -197,6 +235,7 @@ public final class TimetableStore {
 
     public init(
         paths: AppPaths,
+        settings: SchoolSettings?,
         autosaveDelay: TimeInterval = 1.0,
         failureCooldown: TimeInterval = 30,
         apiKey: @escaping @MainActor () -> String?,
@@ -205,13 +244,38 @@ public final class TimetableStore {
         self.failureCooldown = failureCooldown
         self.apiKey = apiKey
         self.transport = transport
-        let loaded = PlanStore.load(TimetableCache(), from: paths.root.appendingPathComponent(Self.fileName))
-        cache = loaded.state
+        self.settings = settings
+        let identity = settings?.timetableIdentity
+        let loaded = PlanStore.load(TimetableCache(identity: identity), from: paths.root.appendingPathComponent(Self.fileName))
+        // Another class's days are not shown; the file is replaced on the next successful fetch.
+        cache = loaded.state.identity == identity ? loaded.state : TimetableCache(identity: identity)
         saver = CacheFileSaver(paths: paths, fileName: Self.fileName, autosaveDelay: autosaveDelay,
                                isBlocked: loaded.blocked, logger: Self.logger)
     }
 
+    /// New settings. Changing the class empties the cache and timetable.json, forgets this session's
+    /// fetches and failures, and discards requests in flight; the caller then requests the day it shows.
+    /// Bell time changes keep the cache, since the fetched classes are the same.
+    public func setSettings(_ newSettings: SchoolSettings?) {
+        let changedClass = newSettings?.timetableIdentity != settings?.timetableIdentity
+        settings = newSettings
+        guard changedClass else {
+            onUpdate?()
+            return
+        }
+        inFlight.values.forEach { $0.task.cancel() }
+        inFlight.removeAll()
+        fetchedThisSession.removeAll()
+        failedDays.removeAll()
+        lastFailure.removeAll()
+        cache = TimetableCache(identity: newSettings?.timetableIdentity)
+        // A nil identity is never written, so the file cannot be mistaken for the old fixed class.
+        if newSettings != nil { saver.schedule(cache) }
+        onUpdate?()
+    }
+
     public func snapshot(for date: Date) -> TimetableSnapshot {
+        guard settings != nil else { return TimetableSnapshot(day: nil, status: .unconfigured) }
         if NEISTimetable.isWeekend(date) { return TimetableSnapshot(day: TimetableDay(), status: .loaded) }
         let day = PlannerState.dayKey(for: date)
         let cached = cache.days[day]
@@ -222,18 +286,19 @@ public final class TimetableStore {
 
     /// Fetches the day unless it is a weekend, is in flight, or already succeeded this session.
     public func request(date: Date) {
-        guard !NEISTimetable.isWeekend(date) else { return }
+        guard let settings, !NEISTimetable.isWeekend(date) else { return }
         let day = PlannerState.dayKey(for: date)
         guard !fetchedThisSession.contains(day), inFlight[day] == nil else { return }
         if let failed = lastFailure[day], Date().timeIntervalSince(failed) < failureCooldown { return }
         failedDays.remove(day)
-        guard let url = NEISTimetable.requestURL(dayKey: day, apiKey: apiKey()) else {
+        guard let url = NEISTimetable.requestURL(settings: settings, dayKey: day, apiKey: apiKey()) else {
             failedDays.insert(day)
             onUpdate?()
             return
         }
 
         let ymd = day.replacingOccurrences(of: "-", with: "")
+        let service = NEISTimetable.service(for: settings.kind)
         let token = UUID()
         let transport = transport
         let task = Task { [weak self] in
@@ -241,7 +306,7 @@ public final class TimetableStore {
             do {
                 let response = try await transport(url)
                 guard response.statusCode == 200 else { throw TimetableError.http(response.statusCode) }
-                outcome = .success(try NEISTimetable.parse(response.data, ymd: ymd))
+                outcome = .success(try NEISTimetable.parse(response.data, service: service, ymd: ymd))
             } catch let error as TimetableError {
                 outcome = .failure(error)
             } catch {

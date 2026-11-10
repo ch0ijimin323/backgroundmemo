@@ -23,6 +23,7 @@ final class MealView: NSView {
     private let nextButton = TabBarView.makeSymbolButton(symbol: "chevron.right", fallback: "›", label: "다음 날")
     private let todayButton = NSButton(title: "", target: nil, action: nil)
     private let dateLabel = NSTextField(labelWithString: "")
+    private let schoolLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let document = FlippedView()
     private let scrollView: NSScrollView
@@ -75,6 +76,7 @@ final class MealView: NSView {
         )
         nextButton.frame = NSRect(x: dateLabel.frame.maxX + 6, y: middle, width: buttonSize, height: buttonSize)
         todayButton.frame = NSRect(x: bounds.width - 54, y: middle, width: 50, height: buttonSize)
+        schoolLabel.layoutInHeader(after: nextButton.frame, before: todayButton.frame, headerHeight: Self.headerHeight)
 
         let statusHeight = statusLabel.isHidden ? 0 : Self.statusLineHeight
         statusLabel.frame = NSRect(x: 8, y: Self.headerHeight, width: max(0, bounds.width - 16), height: statusHeight)
@@ -113,7 +115,21 @@ final class MealView: NSView {
         todayButton.action = #selector(showToday)
         dateLabel.textColor = .white
         dateLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        [previousButton, dateLabel, nextButton, todayButton].forEach(addSubview)
+        schoolLabel.configureAsSchoolLabel()
+        [previousButton, dateLabel, nextButton, schoolLabel, todayButton].forEach(addSubview)
+        updateSchoolLabel()
+    }
+
+    private func updateSchoolLabel() {
+        schoolLabel.stringValue = mealStore.settings?.schoolName ?? ""
+        needsLayout = true
+    }
+
+    /// The controller has given the store new settings.
+    func schoolSettingsDidChange() {
+        updateSchoolLabel()
+        mealStore.request(date: displayedDate)
+        refreshMeals()
     }
 
     // MARK: Date navigation
@@ -154,6 +170,7 @@ final class MealView: NSView {
         let snapshot = mealStore.snapshot(for: displayedDate)
         for section in sections {
             section.update(meal: snapshot.day?.meal(section.kind), hasResult: snapshot.day != nil)
+            section.isHidden = snapshot.status == .unconfigured
         }
         let status = Self.statusText(for: snapshot)
         statusLabel.stringValue = status
@@ -163,6 +180,7 @@ final class MealView: NSView {
 
     private static func statusText(for snapshot: MealSnapshot) -> String {
         switch (snapshot.status, snapshot.day) {
+        case (.unconfigured, _): "학교를 설정하면 급식이 표시됩니다 · BackgroundMemo 메뉴 › 학교 설정…"
         case (.failed, nil): "급식을 불러오지 못했습니다"
         case (.failed, _): "급식을 불러오지 못했습니다 · 저장된 급식 표시 중"
         case (.loading, nil): "급식을 불러오는 중…"

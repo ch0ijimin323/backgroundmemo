@@ -5,10 +5,10 @@ A macOS notepad that lives on the desktop, under your other windows, with the wa
 - Memo tabs with terminal-style splits and rich text
 - A daily planner in 10-minute slots; drag an entry to turn it into a time range
 - A to-do list
-- The class timetable for Daedeok Software Meister High School, grade 1 class 1, from the official NEIS API
-- The school's breakfast, lunch, and dinner menu for any day, also from NEIS
+- Your class timetable, placed in the planner by your school's bell times, from the official NEIS API
+- Your school's breakfast, lunch, and dinner menu for any day, also from NEIS
 
-The school, class, and bell times are fixed in the code for now.
+Elementary, middle, and high schools are supported. Special schools are looked up through the high school timetable, which may not list them.
 
 ## Install
 
@@ -20,9 +20,17 @@ Requires macOS 26 or later on Apple Silicon.
 
 To start it at login, enable **로그인 시 자동 실행** in the BackgroundMemo menu.
 
+## Choose your school
+
+On first launch the **학교 설정** window opens. Search for your school by name, pick it from the list, and choose your grade and class. The bell times are filled in for the school you pick (09:00 start, 50-minute classes, 10-minute breaks, and a 60-minute lunch after period 4); change, add, or remove periods to match your school. Open the window again any time with BackgroundMemo > 학교 설정… (⌘,).
+
+If you close the window without saving, the planner, to-do list, and memos work as usual, and the timetable and meals stay empty until a school is set.
+
+Installs from before this setting existed keep Daedeok Software Meister High School, grade 1 class 1, and its bell times.
+
 ## NEIS API key
 
-Without a key, the planner shows periods 1 to 5. To see every period, get a free key from [open.neis.go.kr](https://open.neis.go.kr) and enter it under 파일 > NEIS 인증키 입력…. The key is stored only on your Mac. The meal tab works without a key; it uses the same key when one is entered.
+Without a key, the planner shows periods 1 to 5 and school search shows at most 5 schools; type a more exact name if yours is not listed. To lift both limits, get a free key from [open.neis.go.kr](https://open.neis.go.kr) and enter it under 파일 > NEIS 인증키 입력…. The key is stored only on your Mac. The meal tab works without a key; it uses the same key when one is entered.
 
 ## Build from source
 

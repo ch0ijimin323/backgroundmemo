@@ -41,14 +41,14 @@ public struct MealDay: Codable, Equatable, Sendable {
     public func meal(_ kind: MealKind) -> Meal? { meals.first { $0.kind == kind } }
 }
 
-/// The fixed NEIS meal query for this school.
+/// The NEIS meal query for the configured school. The same service serves every kind of school.
 public enum NEISMeal {
     public static let endpoint = "https://open.neis.go.kr/hub/mealServiceDietInfo"
     /// A day has at most three meals, so this is enough with or without a key.
     public static let pageSize = 5
 
     /// One day, always the first page. `dayKey` is "yyyy-MM-dd". Weekends are requested too.
-    public static func requestURL(dayKey: String, apiKey: String?) -> URL? {
+    public static func requestURL(settings: SchoolSettings, dayKey: String, apiKey: String?) -> URL? {
         let ymd = dayKey.replacingOccurrences(of: "-", with: "")
         let key = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var components = URLComponents(string: endpoint)
@@ -56,8 +56,8 @@ public enum NEISMeal {
             URLQueryItem(name: "Type", value: "json"),
             URLQueryItem(name: "pIndex", value: "1"),
             URLQueryItem(name: "pSize", value: String(pageSize)),
-            URLQueryItem(name: "ATPT_OFCDC_SC_CODE", value: NEISTimetable.officeCode),
-            URLQueryItem(name: "SD_SCHUL_CODE", value: NEISTimetable.schoolCode),
+            URLQueryItem(name: "ATPT_OFCDC_SC_CODE", value: settings.officeCode),
+            URLQueryItem(name: "SD_SCHUL_CODE", value: settings.schoolCode),
             URLQueryItem(name: "MLSV_FROM_YMD", value: ymd),
             URLQueryItem(name: "MLSV_TO_YMD", value: ymd),
         ]
@@ -121,12 +121,36 @@ public struct MealSnapshot: Equatable, Sendable {
 }
 
 struct MealCache: Codable, Equatable {
+    /// `SchoolSettings.mealIdentity` of the school these days belong to.
+    var identity: String?
     var days: [String: MealDay] = [:]
+
+    init(identity: String?, days: [String: MealDay] = [:]) {
+        self.identity = identity
+        self.days = days
+    }
+
+    private enum CodingKeys: String, CodingKey { case identity, days }
+
+    /// Files written before settings existed hold the old fixed school.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        identity = container.contains(.identity)
+            ? try container.decodeIfPresent(String.self, forKey: .identity)
+            : SchoolSettings.legacyDefault.mealIdentity
+        days = try container.decode([String: MealDay].self, forKey: .days)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(identity, forKey: .identity)
+        try container.encode(days, forKey: .days)
+    }
 }
 
 /// Fetches and caches one calendar day at a time in meals.json under `AppPaths.root`, following the
 /// timetable's rules: a failed fetch never changes the cache, a failed day waits before it is retried,
-/// and save failures are logged and never block quitting.
+/// and save failures are logged and never block quitting. A cache saved for another school is ignored.
 @MainActor
 public final class MealStore {
     private static let logger = Logger(subsystem: "BackgroundMemo", category: "MealStore")
@@ -145,6 +169,7 @@ public final class MealStore {
     private let failureCooldown: TimeInterval
     private let saver: CacheFileSaver
 
+    public private(set) var settings: SchoolSettings?
     private var cache: MealCache
     private var fetchedThisSession: Set<String> = []
     private var failedDays: Set<String> = []
@@ -153,6 +178,7 @@ public final class MealStore {
 
     public init(
         paths: AppPaths,
+        settings: SchoolSettings?,
         autosaveDelay: TimeInterval = 1.0,
         failureCooldown: TimeInterval = 30,
         apiKey: @escaping @MainActor () -> String?,
@@ -161,13 +187,38 @@ public final class MealStore {
         self.failureCooldown = failureCooldown
         self.apiKey = apiKey
         self.transport = transport
-        let loaded = PlanStore.load(MealCache(), from: paths.root.appendingPathComponent(Self.fileName))
-        cache = loaded.state
+        self.settings = settings
+        let identity = settings?.mealIdentity
+        let loaded = PlanStore.load(MealCache(identity: identity), from: paths.root.appendingPathComponent(Self.fileName))
+        // Another school's meals are not shown; the file is replaced on the next successful fetch.
+        cache = loaded.state.identity == identity ? loaded.state : MealCache(identity: identity)
         saver = CacheFileSaver(paths: paths, fileName: Self.fileName, autosaveDelay: autosaveDelay,
                                isBlocked: loaded.blocked, logger: Self.logger)
     }
 
+    /// New settings. Changing the school empties the cache and meals.json, forgets this session's
+    /// fetches and failures, and discards requests in flight; the caller then requests the day it shows.
+    /// A new grade or class at the same school keeps the cache, since meals are per school.
+    public func setSettings(_ newSettings: SchoolSettings?) {
+        let changedSchool = newSettings?.mealIdentity != settings?.mealIdentity
+        settings = newSettings
+        guard changedSchool else {
+            onUpdate?()
+            return
+        }
+        inFlight.values.forEach { $0.task.cancel() }
+        inFlight.removeAll()
+        fetchedThisSession.removeAll()
+        failedDays.removeAll()
+        lastFailure.removeAll()
+        cache = MealCache(identity: newSettings?.mealIdentity)
+        // A nil identity is never written, so the file cannot be mistaken for the old fixed school.
+        if newSettings != nil { saver.schedule(cache) }
+        onUpdate?()
+    }
+
     public func snapshot(for date: Date) -> MealSnapshot {
+        guard settings != nil else { return MealSnapshot(day: nil, status: .unconfigured) }
         let day = PlannerState.dayKey(for: date)
         let cached = cache.days[day]
         if inFlight[day] != nil { return MealSnapshot(day: cached, status: .loading) }
@@ -177,11 +228,12 @@ public final class MealStore {
 
     /// Fetches the day unless it is in flight, already succeeded this session, or failed moments ago.
     public func request(date: Date) {
+        guard let settings else { return }
         let day = PlannerState.dayKey(for: date)
         guard !fetchedThisSession.contains(day), inFlight[day] == nil else { return }
         if let failed = lastFailure[day], Date().timeIntervalSince(failed) < failureCooldown { return }
         failedDays.remove(day)
-        guard let url = NEISMeal.requestURL(dayKey: day, apiKey: apiKey()) else {
+        guard let url = NEISMeal.requestURL(settings: settings, dayKey: day, apiKey: apiKey()) else {
             failedDays.insert(day)
             onUpdate?()
             return

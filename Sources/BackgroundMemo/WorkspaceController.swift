@@ -12,6 +12,8 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
     private let timetableStore: TimetableStore
     private let mealStore: MealStore
     private let neisKeyStore: NEISKeyStore
+    private let schoolSettingsStore: SchoolSettingsStore
+    private var schoolSettingsWindow: SchoolSettingsWindowController?
     private var state: WorkspaceState
 
     private let window: DesktopWindow
@@ -32,7 +34,8 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         planStore: PlanStore,
         timetableStore: TimetableStore,
         mealStore: MealStore,
-        neisKeyStore: NEISKeyStore
+        neisKeyStore: NEISKeyStore,
+        schoolSettingsStore: SchoolSettingsStore
     ) {
         self.workspaceStore = workspaceStore
         self.documentStore = documentStore
@@ -40,6 +43,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         self.timetableStore = timetableStore
         self.mealStore = mealStore
         self.neisKeyStore = neisKeyStore
+        self.schoolSettingsStore = schoolSettingsStore
         plannerView = PlannerView(planStore: planStore, timetableStore: timetableStore)
         todoView = TodoView(planStore: planStore)
         mealView = MealView(mealStore: mealStore)
@@ -116,6 +120,42 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
             log.error("NEIS key file update failed")
             Alerts.showKeyStoreFailed()
         }
+    }
+
+    /// Opens the school settings window, or brings it forward when it is already open.
+    @objc func showSchoolSettings(_ sender: Any?) {
+        if let open = schoolSettingsWindow {
+            open.present()
+            return
+        }
+        let controller = SchoolSettingsWindowController(
+            current: timetableStore.settings,
+            apiKey: { [neisKeyStore] in neisKeyStore.key }
+        )
+        controller.onSave = { [weak self] settings in self?.applySchoolSettings(settings) }
+        controller.onClose = { [weak self] in
+            guard let self else { return }
+            self.schoolSettingsWindow = nil
+            self.window.makeKey()
+            self.focusSelectedPane()
+        }
+        schoolSettingsWindow = controller
+        controller.present()
+    }
+
+    /// Saves the settings and switches the timetable and meals to them. A failed save still applies
+    /// them for this session, so the user sees their school, and says the file was not written.
+    private func applySchoolSettings(_ settings: SchoolSettings) {
+        do {
+            try schoolSettingsStore.save(settings)
+        } catch {
+            log.error("School settings save failed: \(String(describing: error), privacy: .public)")
+            Alerts.showSchoolSettingsSaveFailed(blocked: error as? SchoolSettingsError == .saveBlocked)
+        }
+        timetableStore.setSettings(settings)
+        mealStore.setSettings(settings)
+        plannerView.schoolSettingsDidChange()
+        mealView.schoolSettingsDidChange()
     }
 
     @objc func closeFocusedPane(_ sender: Any?) {

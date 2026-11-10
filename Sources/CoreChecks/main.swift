@@ -583,7 +583,7 @@ private func run() async -> Int {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let calls = LockedCounter()
-        let store = TimetableStore(paths: AppPaths(root: root), autosaveDelay: 0, failureCooldown: 60, apiKey: { nil }, transport: { _ in
+        let store = TimetableStore(paths: AppPaths(root: root), settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 60, apiKey: { nil }, transport: { _ in
             calls.increment()
             return (Data(), 500)
         })
@@ -604,15 +604,15 @@ private func run() async -> Int {
     })
 
     record(await check("timetable request stays within the keyless limit") {
-        let keyless = try require(NEISTimetable.requestURL(dayKey: "2026-11-09", apiKey: nil), "no URL")
+        let keyless = try require(NEISTimetable.requestURL(settings: .legacyDefault, dayKey: "2026-11-09", apiKey: nil), "no URL")
         let query = queryItems(keyless)
         try expect(query["pSize"] == "5" && query["pIndex"] == "1" && query["KEY"] == nil, "keyless query")
         try expect(query["TI_FROM_YMD"] == "20261109" && query["TI_TO_YMD"] == "20261109", "single day")
         try expect(query["ATPT_OFCDC_SC_CODE"] == "G10" && query["SD_SCHUL_CODE"] == "7430310", "school")
         try expect(query["GRADE"] == "1" && query["CLASS_NM"] == "1", "class")
-        let keyed = queryItems(try require(NEISTimetable.requestURL(dayKey: "2026-11-09", apiKey: "abc"), "no URL"))
+        let keyed = queryItems(try require(NEISTimetable.requestURL(settings: .legacyDefault, dayKey: "2026-11-09", apiKey: "abc"), "no URL"))
         try expect(keyed["pSize"] == "30" && keyed["pIndex"] == "1" && keyed["KEY"] == "abc", "keyed query")
-        try expect(queryItems(try require(NEISTimetable.requestURL(dayKey: "2026-11-09", apiKey: "  "), "no URL"))["KEY"] == nil, "blank key used")
+        try expect(queryItems(try require(NEISTimetable.requestURL(settings: .legacyDefault, dayKey: "2026-11-09", apiKey: "  "), "no URL"))["KEY"] == nil, "blank key used")
     })
 
     record(await check("timetable failures never overwrite the cache") {
@@ -620,7 +620,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let date = try gregorianDate(2026, 11, 9)
         let good = Data(timetableJSON(total: 1, rows: [("1", "국어")]).utf8)
-        let first = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (good, 200) })
+        let first = TimetableStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (good, 200) })
         first.request(date: date)
         try await waitUntilSettled(first, date)
         first.flush()
@@ -636,7 +636,7 @@ private func run() async -> Int {
             { _ in throw URLError(.notConnectedToInternet) },
         ]
         for transport in failures {
-            let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+            let store = TimetableStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
             store.request(date: date)
             try await waitUntilSettled(store, date)
             let snapshot = store.snapshot(for: date)
@@ -652,7 +652,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let counter = RequestCounter()
         let body = Data(timetableJSON(total: 1, rows: [("1", "국어")]).utf8)
-        let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in
+        let store = TimetableStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in
             counter.increment()
             return (body, 200)
         })
@@ -676,7 +676,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let counter = RequestCounter()
         let key = StringBox("")
-        let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { key.text.isEmpty ? nil : key.text }, transport: { url in
+        let store = TimetableStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { key.text.isEmpty ? nil : key.text }, transport: { url in
             counter.increment()
             let keyed = url.query?.contains("KEY=") == true
             let rows = keyed ? [("1", "국어"), ("2", "영어")] : [("1", "국어")]
@@ -700,7 +700,7 @@ private func run() async -> Int {
     record(await check("timetable late response stays on its own day") {
         let paths = try temporaryPaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
-        let store = TimetableStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { url in
+        let store = TimetableStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { url in
             let isMonday = url.query?.contains("TI_FROM_YMD=20261109") == true
             if isMonday { try await Task.sleep(for: .milliseconds(60)) }
             let rows = isMonday ? [("1", "월요일")] : [("1", "화요일")]
@@ -814,18 +814,18 @@ private func run() async -> Int {
     })
 
     record(await check("meal request asks for one day including weekends") {
-        let keyless = queryItems(try require(NEISMeal.requestURL(dayKey: "2026-11-14", apiKey: nil), "no URL"))
+        let keyless = queryItems(try require(NEISMeal.requestURL(settings: .legacyDefault, dayKey: "2026-11-14", apiKey: nil), "no URL"))
         try expect(keyless["pSize"] == "5" && keyless["pIndex"] == "1" && keyless["Type"] == "json" && keyless["KEY"] == nil, "keyless query")
         try expect(keyless["MLSV_FROM_YMD"] == "20261114" && keyless["MLSV_TO_YMD"] == "20261114", "single day")
         try expect(keyless["ATPT_OFCDC_SC_CODE"] == "G10" && keyless["SD_SCHUL_CODE"] == "7430310", "school")
-        let keyed = queryItems(try require(NEISMeal.requestURL(dayKey: "2026-11-14", apiKey: " abc "), "no URL"))
+        let keyed = queryItems(try require(NEISMeal.requestURL(settings: .legacyDefault, dayKey: "2026-11-14", apiKey: " abc "), "no URL"))
         try expect(keyed["pSize"] == "5" && keyed["KEY"] == "abc", "keyed query")
-        try expect(queryItems(try require(NEISMeal.requestURL(dayKey: "2026-11-14", apiKey: "  "), "no URL"))["KEY"] == nil, "blank key used")
+        try expect(queryItems(try require(NEISMeal.requestURL(settings: .legacyDefault, dayKey: "2026-11-14", apiKey: "  "), "no URL"))["KEY"] == nil, "blank key used")
 
         let paths = try temporaryPaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let counter = RequestCounter()
-        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in
+        let store = MealStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in
             counter.increment()
             return (Data(mealJSON([mealRow(code: "2", dishes: "주말 점심", ymd: "20261114")]).utf8), 200)
         })
@@ -845,7 +845,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let date = try gregorianDate(2026, 11, 10)
         let good = Data(sampleMealJSON.utf8)
-        let first = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (good, 200) })
+        let first = MealStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (good, 200) })
         first.request(date: date)
         try await waitUntilMealSettled(first, date)
         first.flush()
@@ -862,7 +862,7 @@ private func run() async -> Int {
             { _ in throw URLError(.notConnectedToInternet) },
         ]
         for transport in failures {
-            let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+            let store = MealStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
             try expect(store.snapshot(for: date) == MealSnapshot(day: expected, status: .loaded), "cache not loaded")
             store.request(date: date)
             try await waitUntilMealSettled(store, date)
@@ -872,7 +872,7 @@ private func run() async -> Int {
             try await Task.sleep(for: .milliseconds(20))
             try expect(try Data(contentsOf: file) == saved, "failure rewrote the cache")
         }
-        let empty = MealStore(paths: try temporaryPaths(), autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (Data(), 500) })
+        let empty = MealStore(paths: try temporaryPaths(), settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (Data(), 500) })
         empty.request(date: date)
         try await waitUntilMealSettled(empty, date)
         try expect(empty.snapshot(for: date) == MealSnapshot(day: nil, status: .failed), "failure without cache")
@@ -882,7 +882,7 @@ private func run() async -> Int {
         let paths = try temporaryPaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let counter = RequestCounter()
-        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 60, apiKey: { nil }, transport: { _ in
+        let store = MealStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 60, apiKey: { nil }, transport: { _ in
             counter.increment()
             return (Data(), 500)
         })
@@ -898,7 +898,7 @@ private func run() async -> Int {
     record(await check("meal late response stays on its own day") {
         let paths = try temporaryPaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
-        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { url in
+        let store = MealStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { url in
             let isMonday = url.query?.contains("MLSV_FROM_YMD=20261109") == true
             if isMonday { try await Task.sleep(for: .milliseconds(60)) }
             let ymd = isMonday ? "20261109" : "20261110"
@@ -921,7 +921,7 @@ private func run() async -> Int {
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let file = paths.root.appendingPathComponent("meals.json")
         try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
-        let store = MealStore(paths: paths, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (Data(sampleMealJSON.utf8), 200) })
+        let store = MealStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: { _ in (Data(sampleMealJSON.utf8), 200) })
         let date = try gregorianDate(2026, 11, 10)
         store.request(date: date)
         try await waitUntilMealSettled(store, date)
@@ -985,11 +985,11 @@ private func run() async -> Int {
 
     record(await check("school bell maps periods to start times") {
         let expected = [1: 520, 2: 580, 3: 640, 4: 700, 5: 810, 6: 870, 7: 930, 8: 980]
-        try expect(SchoolBell.startMinutes == expected, "bell table")
-        try expect(SchoolBell.classLength == 50, "class length")
+        try expect(daedeokBell.startMinutes == expected, "bell table")
+        try expect(daedeokBell.classLength == 50, "class length")
         for (period, start) in expected {
             let day = TimetableDay(entries: [TimetableEntry(period: period, subject: "수업")])
-            try expect(SchoolBell.lesson(atSlot: start, in: day)?.entry.period == period, "period \(period) start")
+            try expect(daedeokBell.lesson(atSlot: start, in: day)?.entry.period == period, "period \(period) start")
         }
     })
 
@@ -998,36 +998,36 @@ private func run() async -> Int {
             TimetableEntry(period: 4, subject: "넷째"),
             TimetableEntry(period: 5, subject: "다섯째"),
         ])
-        try expect(SchoolBell.lesson(atSlot: 740, in: day)?.entry.period == 4, "fourth period end")
+        try expect(daedeokBell.lesson(atSlot: 740, in: day)?.entry.period == 4, "fourth period end")
         for minute in stride(from: 750, through: 800, by: 10) {
-            try expect(SchoolBell.lesson(atSlot: minute, in: day) == nil, "class during lunch at \(minute)")
+            try expect(daedeokBell.lesson(atSlot: minute, in: day) == nil, "class during lunch at \(minute)")
         }
-        try expect(SchoolBell.lesson(atSlot: 810, in: day) == SlotLesson(entry: day.entries[1], startMinute: 810, isFirstSlot: true), "13:30 start")
+        try expect(daedeokBell.lesson(atSlot: 810, in: day) == SlotLesson(entry: day.entries[1], startMinute: 810, isFirstSlot: true), "13:30 start")
     })
 
     record(await check("school bell distinguishes the first slot") {
         let entry = TimetableEntry(period: 1, subject: "공통수학2")
         let day = TimetableDay(entries: [entry])
-        try expect(SchoolBell.lesson(atSlot: 510, in: day) == nil, "class before the bell")
-        try expect(SchoolBell.lesson(atSlot: 520, in: day)?.isFirstSlot == true, "first slot")
+        try expect(daedeokBell.lesson(atSlot: 510, in: day) == nil, "class before the bell")
+        try expect(daedeokBell.lesson(atSlot: 520, in: day)?.isFirstSlot == true, "first slot")
         for minute in [530, 540, 550, 560] {
-            try expect(SchoolBell.lesson(atSlot: minute, in: day) == SlotLesson(entry: entry, startMinute: 520, isFirstSlot: false), "later slot \(minute)")
+            try expect(daedeokBell.lesson(atSlot: minute, in: day) == SlotLesson(entry: entry, startMinute: 520, isFirstSlot: false), "later slot \(minute)")
         }
-        try expect(SchoolBell.lesson(atSlot: 570, in: day) == nil, "class past 50 minutes")
-        try expect(PlannerState.slots.filter { SchoolBell.lesson(atSlot: $0, in: day) != nil }.count == 5, "slot count")
-        try expect(SchoolBell.lesson(atSlot: 525, in: day) == nil, "non-slot minute matched")
+        try expect(daedeokBell.lesson(atSlot: 570, in: day) == nil, "class past 50 minutes")
+        try expect(PlannerState.slots.filter { daedeokBell.lesson(atSlot: $0, in: day) != nil }.count == 5, "slot count")
+        try expect(daedeokBell.lesson(atSlot: 525, in: day) == nil, "non-slot minute matched")
     })
 
     record(await check("school bell handles eighth and unknown periods") {
         let seventh = TimetableEntry(period: 7, subject: "일곱째")
         let eighth = TimetableEntry(period: 8, subject: "여덟째")
         let day = TimetableDay(entries: [seventh, eighth, TimetableEntry(period: 9, subject: "미지"), TimetableEntry(period: 0, subject: "영교시")])
-        try expect(SchoolBell.lesson(atSlot: 970, in: day)?.entry == seventh, "seventh period end")
-        try expect(SchoolBell.lesson(atSlot: 980, in: day) == SlotLesson(entry: eighth, startMinute: 980, isFirstSlot: true), "eighth period start")
-        try expect(SchoolBell.lesson(atSlot: 1020, in: day)?.entry == eighth, "eighth period end")
-        try expect(SchoolBell.lesson(atSlot: 1030, in: day) == nil, "eighth period overran")
+        try expect(daedeokBell.lesson(atSlot: 970, in: day)?.entry == seventh, "seventh period end")
+        try expect(daedeokBell.lesson(atSlot: 980, in: day) == SlotLesson(entry: eighth, startMinute: 980, isFirstSlot: true), "eighth period start")
+        try expect(daedeokBell.lesson(atSlot: 1020, in: day)?.entry == eighth, "eighth period end")
+        try expect(daedeokBell.lesson(atSlot: 1030, in: day) == nil, "eighth period overran")
         let unknown = TimetableDay(entries: [TimetableEntry(period: 9, subject: "미지")])
-        try expect(PlannerState.slots.allSatisfy { SchoolBell.lesson(atSlot: $0, in: unknown) == nil }, "unknown period placed")
+        try expect(PlannerState.slots.allSatisfy { daedeokBell.lesson(atSlot: $0, in: unknown) == nil }, "unknown period placed")
     })
 
     record(await check("planner span round trip") {
@@ -1167,6 +1167,329 @@ private func run() async -> Int {
         try expect(planner.span(day: "2026-11-11", atSlot: 980) == nil, "another day")
     })
 
+    // MARK: School settings
+
+    record(await check("school settings save round trip") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let settings = sampleSchool(kind: .middle, grade: 3, className: "가")
+        try SchoolSettingsStore(paths: paths).save(settings)
+        let loaded = SchoolSettingsStore(paths: paths).load()
+        try expect(loaded == LoadedSchoolSettings(settings: settings, needsSetup: false, saveBlocked: false), "loaded \(loaded)")
+        try expect(!FileManager.default.fileExists(atPath: paths.workspaceFile.path), "workspace.json created")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: paths.root.path)
+        try expect(leftovers == ["school.json"], "extra files \(leftovers)")
+        var invalid = settings
+        invalid.grade = 4
+        do {
+            try SchoolSettingsStore(paths: paths).save(invalid)
+            throw CheckFailure(description: "invalid grade saved")
+        } catch is CheckFailure { throw CheckFailure(description: "invalid grade saved") } catch {}
+        try expect(SchoolSettingsStore(paths: paths).load().settings == settings, "invalid save changed the file")
+    })
+
+    record(await check("unreadable school.json is never overwritten") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let file = paths.root.appendingPathComponent("school.json")
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: paths.workspaceFile)
+        let store = SchoolSettingsStore(paths: paths)
+        let loaded = store.load()
+        try expect(loaded == LoadedSchoolSettings(settings: nil, needsSetup: false, saveBlocked: true), "loaded \(loaded)")
+        do {
+            try store.save(sampleSchool())
+            throw CheckFailure(description: "save not blocked")
+        } catch SchoolSettingsError.saveBlocked {}
+        var isDirectory: ObjCBool = false
+        try expect(FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory) && isDirectory.boolValue, "unreadable file replaced")
+    })
+
+    record(await check("corrupt school.json is kept and asks again") {
+        for body in ["{broken", #"{"officeCode":"G10","schoolCode":"1","schoolName":"x","kind":"high","grade":7,"className":"1","periodStartMinutes":[540],"classLength":50}"#] {
+            let paths = try temporaryPaths()
+            defer { try? FileManager.default.removeItem(at: paths.root) }
+            try Data("{}".utf8).write(to: paths.workspaceFile)
+            try Data(body.utf8).write(to: paths.root.appendingPathComponent("school.json"))
+            let store = SchoolSettingsStore(paths: paths)
+            let loaded = store.load()
+            try expect(loaded == LoadedSchoolSettings(settings: nil, needsSetup: true, saveBlocked: false), "loaded \(loaded)")
+            let names = try FileManager.default.contentsOfDirectory(atPath: paths.root.path)
+            let backups = names.filter { $0.hasPrefix("school.corrupt-") }
+            try expect(backups.count == 1, "no backup in \(names)")
+            try expect(try Data(contentsOf: paths.root.appendingPathComponent(backups[0])) == Data(body.utf8), "backup changed")
+            try store.save(sampleSchool())
+            try expect(SchoolSettingsStore(paths: paths).load().settings == sampleSchool(), "save after backup")
+        }
+    })
+
+    record(await check("existing install becomes 대덕 1학년 1반, new install asks") {
+        let existing = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: existing.root) }
+        try JSONEncoder().encode(WorkspaceState.initial()).write(to: existing.workspaceFile)
+        let migrated = SchoolSettingsStore(paths: existing).load()
+        try expect(migrated == LoadedSchoolSettings(settings: .legacyDefault, needsSetup: false, saveBlocked: false), "migrated \(migrated)")
+        let legacy = SchoolSettings.legacyDefault
+        try expect(legacy.officeCode == "G10" && legacy.schoolCode == "7430310" && legacy.kind == .high, "school")
+        try expect(legacy.grade == 1 && legacy.className == "1", "class")
+        try expect(legacy.periodStartMinutes == [520, 580, 640, 700, 810, 870, 930, 980] && legacy.classLength == 50, "bell")
+        try expect(SchoolSettingsStore(paths: existing).load().settings == legacy, "migration not saved")
+
+        let fresh = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: fresh.root) }
+        let loaded = SchoolSettingsStore(paths: fresh).load()
+        try expect(loaded == LoadedSchoolSettings(settings: nil, needsSetup: true, saveBlocked: false), "fresh \(loaded)")
+        try expect(try FileManager.default.contentsOfDirectory(atPath: fresh.root.path).isEmpty, "new install wrote files")
+        try expect(SchoolSettingsStore(paths: fresh).load().needsSetup, "new install stopped asking")
+    })
+
+    record(await check("timetable endpoint follows the school kind") {
+        let expected: [(SchoolKind, String)] = [(.high, "hisTimetable"), (.middle, "misTimetable"), (.elementary, "elsTimetable"), (.other, "hisTimetable")]
+        for (kind, service) in expected {
+            let settings = sampleSchool(kind: kind, grade: 2, className: "3")
+            let url = try require(NEISTimetable.requestURL(settings: settings, dayKey: "2026-11-09", apiKey: nil), "no URL")
+            try expect(url.host == "open.neis.go.kr" && url.path == "/hub/\(service)", "\(kind) path \(url.path)")
+            let query = queryItems(url)
+            try expect(query["ATPT_OFCDC_SC_CODE"] == "B10" && query["SD_SCHUL_CODE"] == "7010000", "\(kind) school")
+            try expect(query["GRADE"] == "2" && query["CLASS_NM"] == "3", "\(kind) class")
+            let meal = try require(NEISMeal.requestURL(settings: settings, dayKey: "2026-11-09", apiKey: nil), "no meal URL")
+            try expect(meal.path == "/hub/mealServiceDietInfo", "\(kind) meal path")
+            try expect(queryItems(meal)["SD_SCHUL_CODE"] == "7010000" && queryItems(meal)["GRADE"] == nil, "\(kind) meal query")
+        }
+        try expect(SchoolKind(neisName: "초등학교") == .elementary && SchoolKind(neisName: "중학교") == .middle, "kind names")
+        try expect(SchoolKind(neisName: "고등학교") == .high && SchoolKind(neisName: "특수학교") == .other, "kind names")
+        try expect(SchoolKind.elementary.grades == 1...6 && SchoolKind.middle.grades == 1...3 && SchoolKind.high.grades == 1...3, "grades")
+        let named = try require(NEISTimetable.requestURL(settings: sampleSchool(className: "가"), dayKey: "2026-11-09", apiKey: nil), "no URL")
+        try expect(queryItems(named)["CLASS_NM"] == "가", "class name changed")
+    })
+
+    record(await check("elementary timetable store reads the elsTimetable envelope") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let body = timetableJSON(total: 1, rows: [("1", "국어")]).replacingOccurrences(of: "hisTimetable", with: "elsTimetable")
+        let store = TimetableStore(paths: paths, settings: sampleSchool(kind: .elementary, grade: 5), autosaveDelay: 0, failureCooldown: 0,
+                                   apiKey: { nil }, transport: { url in
+            guard url.path == "/hub/elsTimetable" else { return (Data(), 404) }
+            return (Data(body.utf8), 200)
+        })
+        let date = try gregorianDate(2026, 11, 9)
+        store.request(date: date)
+        try await waitUntilSettled(store, date)
+        try expect(store.snapshot(for: date) == TimetableSnapshot(day: TimetableDay(entries: [TimetableEntry(period: 1, subject: "국어")]), status: .loaded), "elementary day")
+        store.flush()
+    })
+
+    record(await check("default bell times for 대덕 and other schools") {
+        let daedeok = SchoolSettings.defaultBell(officeCode: "G10", schoolCode: "7430310")
+        try expect(daedeok.periodStartMinutes == [520, 580, 640, 700, 810, 870, 930, 980] && daedeok.classLength == 50, "대덕 \(daedeok)")
+        let other = SchoolSettings.defaultBell(officeCode: "B10", schoolCode: "7010000")
+        // 09:00 10:00 11:00 12:00, lunch 12:50–13:50, then 13:50 14:50 15:50 16:50.
+        try expect(other.periodStartMinutes == [540, 600, 660, 720, 830, 890, 950, 1010] && other.classLength == 50, "other \(other)")
+        try expect(SchoolSettings.defaultBell(officeCode: "B10", schoolCode: "7430310").periodStartMinutes == other.periodStartMinutes, "code alone matched")
+        try expect(SchoolSettings.minutes(fromClock: "08:40") == 520 && SchoolSettings.minutes(fromClock: "8:05") == 485, "clock parse")
+        for bad in ["24:00", "8:60", "0840", "8:4", "", "ab:cd", "-1:00", "８:40"] {
+            try expect(SchoolSettings.minutes(fromClock: bad) == nil, "accepted \(bad)")
+        }
+        try expect(SchoolSettings.clockText(520) == "08:40" && SchoolSettings.clockText(1010) == "16:50", "clock text")
+
+        let bell = SchoolBell(periodStartMinutes: [525, 600], classLength: 45)
+        let day = TimetableDay(entries: [TimetableEntry(period: 1, subject: "국어"), TimetableEntry(period: 2, subject: "수학")])
+        try expect(bell.lesson(atSlot: 520, in: day) == nil, "before an off-slot start")
+        try expect(bell.lesson(atSlot: 530, in: day)?.isFirstSlot == true, "off-slot start not labeled")
+        try expect(bell.lesson(atSlot: 540, in: day)?.isFirstSlot == false, "second label")
+        try expect(bell.lesson(atSlot: 570, in: day) == nil, "past 45 minutes")
+        try expect(bell.lesson(atSlot: 600, in: day)?.entry.period == 2, "second period")
+    })
+
+    record(await check("school search parses results") {
+        let page = try NEISSchoolSearch.parse(Data(schoolInfoJSON(total: 2, rows: [
+            ("대덕소프트웨어마이스터고등학교", "고등학교", "G10", "7430310", "대전광역시"),
+            ("대덕초등학교", "초등학교", "G10", "7431000", "대전광역시"),
+        ]).utf8))
+        try expect(!page.hasMore, "complete page marked as more")
+        try expect(page.results == [
+            SchoolSearchResult(name: "대덕소프트웨어마이스터고등학교", kindName: "고등학교", officeCode: "G10", schoolCode: "7430310", region: "대전광역시"),
+            SchoolSearchResult(name: "대덕초등학교", kindName: "초등학교", officeCode: "G10", schoolCode: "7431000", region: "대전광역시"),
+        ], "results \(page.results)")
+        try expect(page.results.map(\.kind) == [.high, .elementary], "kinds")
+        let missingCode = try NEISSchoolSearch.parse(Data(schoolInfoJSON(total: 1, rows: [("이름", "중학교", "G10", "", "대전")]).utf8))
+        try expect(missingCode.results.isEmpty, "row without a code kept")
+    })
+
+    record(await check("school search INFO-200, more results, and failures") {
+        try expect(try NEISSchoolSearch.parse(Data(#"{"RESULT":{"CODE":"INFO-200","MESSAGE":"해당하는 데이터가 없습니다."}}"#.utf8)) == SchoolSearchPage(), "INFO-200")
+        let rows = (1...5).map { ("학교\($0)", "고등학교", "B10", "70100\($0)", "서울특별시") }
+        let more = try NEISSchoolSearch.parse(Data(schoolInfoJSON(total: 12, rows: rows).utf8))
+        try expect(more.hasMore && more.results.count == 5, "more results not reported")
+        for (body, error) in [("{broken", TimetableError.malformedResponse), (#"{"RESULT":{"CODE":"ERROR-290"}}"#, .api(code: "ERROR-290")), ("[]", .malformedResponse)] {
+            do {
+                _ = try NEISSchoolSearch.parse(Data(body.utf8))
+                throw CheckFailure(description: "parsed \(body)")
+            } catch let thrown as TimetableError {
+                try expect(thrown == error, "\(body): \(thrown)")
+            }
+        }
+        let keyless = queryItems(try require(NEISSchoolSearch.requestURL(query: " 대덕 ", apiKey: nil), "no URL"))
+        try expect(keyless["pSize"] == "5" && keyless["pIndex"] == "1" && keyless["Type"] == "json" && keyless["SCHUL_NM"] == "대덕" && keyless["KEY"] == nil, "keyless \(keyless)")
+        let keyed = queryItems(try require(NEISSchoolSearch.requestURL(query: "대덕", apiKey: "abc"), "no URL"))
+        try expect(keyed["pIndex"] == "1" && keyed["KEY"] == "abc" && keyed["pSize"] == "100", "keyed \(keyed)")
+        try expect(NEISSchoolSearch.requestURL(query: "  ", apiKey: nil) == nil, "blank query")
+
+        let calls = LockedCounter()
+        let result = await NEISSchoolSearch.search(query: "학교", apiKey: nil, transport: { url in
+            calls.increment()
+            try expect(url.path == "/hub/schoolInfo", "path")
+            return (Data(schoolInfoJSON(total: 12, rows: rows).utf8), 200)
+        })
+        try expect(calls.value == 1 && (try? result.get())?.hasMore == true, "search did not stop at one page")
+        let failed = await NEISSchoolSearch.search(query: "학교", apiKey: nil, transport: { _ in throw URLError(.notConnectedToInternet) })
+        try expect(failed == .failure(.network), "network failure")
+        let http = await NEISSchoolSearch.search(query: "학교", apiKey: nil, transport: { _ in (Data(), 500) })
+        try expect(http == .failure(.http(500)), "http failure")
+    })
+
+    record(await check("unconfigured stores request nothing") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let counter = RequestCounter()
+        let transport: TimetableTransport = { _ in counter.increment(); return (Data(), 200) }
+        let timetable = TimetableStore(paths: paths, settings: nil, autosaveDelay: 0, apiKey: { nil }, transport: transport)
+        let meals = MealStore(paths: paths, settings: nil, autosaveDelay: 0, apiKey: { nil }, transport: transport)
+        let date = try gregorianDate(2026, 11, 9)
+        timetable.request(date: date)
+        meals.request(date: date)
+        try await Task.sleep(for: .milliseconds(30))
+        try expect(counter.count == 0, "requested without a school")
+        try expect(timetable.snapshot(for: date) == TimetableSnapshot(day: nil, status: .unconfigured), "timetable status")
+        try expect(meals.snapshot(for: date) == MealSnapshot(day: nil, status: .unconfigured), "meal status")
+    })
+
+    record(await check("changing the school clears caches and discards requests in flight") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let counter = RequestCounter()
+        let transport: TimetableTransport = { url in
+            counter.increment()
+            let isOld = queryItems(url)["SD_SCHUL_CODE"] == "7430310"
+            if isOld { try await Task.sleep(for: .milliseconds(80)) }
+            if url.path.hasSuffix("mealServiceDietInfo") {
+                return (Data(mealJSON([mealRow(code: "2", dishes: isOld ? "옛 학교" : "새 학교")]).utf8), 200)
+            }
+            return (Data(timetableJSON(total: 1, rows: [("1", isOld ? "옛 학교" : "새 학교")], ymd: "20261110").utf8), 200)
+        }
+        let date = try gregorianDate(2026, 11, 10)
+        let timetable = TimetableStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+        let meals = MealStore(paths: paths, settings: .legacyDefault, autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+        timetable.request(date: date)
+        meals.request(date: date)
+        try expect(timetable.snapshot(for: date).status == .loading && meals.snapshot(for: date).status == .loading, "not in flight")
+
+        let next = sampleSchool()
+        timetable.setSettings(next)
+        meals.setSettings(next)
+        try expect(timetable.snapshot(for: date) == TimetableSnapshot(day: nil, status: .loading), "timetable not cleared")
+        try expect(meals.snapshot(for: date) == MealSnapshot(day: nil, status: .loading), "meals not cleared")
+        timetable.request(date: date)
+        meals.request(date: date)
+        try await waitUntilSettled(timetable, date)
+        try await waitUntilMealSettled(meals, date)
+        // The old school's late answers arrive after this.
+        try await Task.sleep(for: .milliseconds(120))
+        try expect(timetable.snapshot(for: date).day?.entries.first?.subject == "새 학교", "timetable \(timetable.snapshot(for: date))")
+        try expect(meals.snapshot(for: date).day?.meal(.lunch)?.dishes == ["새 학교"], "meals \(meals.snapshot(for: date))")
+        try expect(counter.count == 4, "requests \(counter.count)")
+
+        // Switching back forgets this session's fetches, so the day is fetched again for the old school.
+        timetable.setSettings(.legacyDefault)
+        meals.setSettings(.legacyDefault)
+        timetable.flush()
+        meals.flush()
+        for name in ["timetable.json", "meals.json"] {
+            let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: paths.root.appendingPathComponent(name))) as? [String: Any]
+            try expect((saved?["days"] as? [String: Any])?.isEmpty == true, "\(name) not emptied")
+            try expect(saved?["identity"] as? String != nil, "\(name) has no identity")
+        }
+        timetable.request(date: date)
+        meals.request(date: date)
+        try await waitUntilSettled(timetable, date)
+        try await waitUntilMealSettled(meals, date)
+        try expect(counter.count == 6, "session fetch record kept: \(counter.count)")
+        try expect(timetable.snapshot(for: date).day?.entries.first?.subject == "옛 학교", "refetch")
+        timetable.flush()
+        meals.flush()
+    })
+
+    record(await check("bell and class changes keep caches that still apply") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let counter = RequestCounter()
+        let transport: TimetableTransport = { url in
+            counter.increment()
+            if url.path.hasSuffix("mealServiceDietInfo") { return (Data(mealJSON([mealRow(code: "2", dishes: "점심")]).utf8), 200) }
+            return (Data(timetableJSON(total: 1, rows: [("1", "국어")], ymd: "20261110").utf8), 200)
+        }
+        let date = try gregorianDate(2026, 11, 10)
+        let timetable = TimetableStore(paths: paths, settings: sampleSchool(), autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+        let meals = MealStore(paths: paths, settings: sampleSchool(), autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+        timetable.request(date: date)
+        meals.request(date: date)
+        try await waitUntilSettled(timetable, date)
+        try await waitUntilMealSettled(meals, date)
+        var bellOnly = sampleSchool()
+        bellOnly.periodStartMinutes = [500, 560]
+        timetable.setSettings(bellOnly)
+        try expect(timetable.snapshot(for: date).day != nil && timetable.settings == bellOnly, "bell change cleared the timetable")
+        let otherClass = sampleSchool(className: "4")
+        timetable.setSettings(otherClass)
+        meals.setSettings(otherClass)
+        try expect(timetable.snapshot(for: date).day == nil, "class change kept the timetable")
+        try expect(meals.snapshot(for: date).day != nil, "class change cleared the school's meals")
+        meals.request(date: date)
+        try await Task.sleep(for: .milliseconds(30))
+        try expect(counter.count == 2, "meals fetched again: \(counter.count)")
+        timetable.flush()
+        meals.flush()
+    })
+
+    record(await check("caches saved for other settings are ignored") {
+        let paths = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let date = try gregorianDate(2026, 11, 10)
+        let transport: TimetableTransport = { url in
+            if url.path.hasSuffix("mealServiceDietInfo") { return (Data(mealJSON([mealRow(code: "2", dishes: "점심")]).utf8), 200) }
+            return (Data(timetableJSON(total: 1, rows: [("1", "국어")], ymd: "20261110").utf8), 200)
+        }
+        let first = TimetableStore(paths: paths, settings: sampleSchool(), autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+        let firstMeals = MealStore(paths: paths, settings: sampleSchool(), autosaveDelay: 0, failureCooldown: 0, apiKey: { nil }, transport: transport)
+        first.request(date: date)
+        firstMeals.request(date: date)
+        try await waitUntilSettled(first, date)
+        try await waitUntilMealSettled(firstMeals, date)
+        first.flush()
+        firstMeals.flush()
+        let offline: TimetableTransport = { _ in throw URLError(.notConnectedToInternet) }
+
+        let same = TimetableStore(paths: paths, settings: sampleSchool(), apiKey: { nil }, transport: offline)
+        try expect(same.snapshot(for: date).day?.entries.first?.subject == "국어", "own cache ignored")
+        let other = TimetableStore(paths: paths, settings: sampleSchool(grade: 2), apiKey: { nil }, transport: offline)
+        try expect(other.snapshot(for: date).day == nil, "another class's cache shown")
+        let otherMeals = MealStore(paths: paths, settings: .legacyDefault, apiKey: { nil }, transport: offline)
+        try expect(otherMeals.snapshot(for: date).day == nil, "another school's meals shown")
+        let sameMeals = MealStore(paths: paths, settings: sampleSchool(grade: 2), apiKey: { nil }, transport: offline)
+        try expect(sameMeals.snapshot(for: date).day?.meal(.lunch)?.dishes == ["점심"], "same school's meals ignored")
+
+        // Files from before settings existed belong to 대덕 1학년 1반.
+        let legacy = try temporaryPaths()
+        defer { try? FileManager.default.removeItem(at: legacy.root) }
+        let day = TimetableDay(entries: [TimetableEntry(period: 1, subject: "옛 캐시")])
+        try JSONEncoder().encode(["days": ["2026-11-10": day]]).write(to: legacy.root.appendingPathComponent("timetable.json"))
+        try JSONEncoder().encode(["days": ["2026-11-10": MealDay(meals: [Meal(kind: .lunch, calories: "", dishes: ["옛 급식"])])]])
+            .write(to: legacy.root.appendingPathComponent("meals.json"))
+        try expect(TimetableStore(paths: legacy, settings: .legacyDefault, apiKey: { nil }, transport: offline).snapshot(for: date).day == day, "legacy timetable lost")
+        try expect(TimetableStore(paths: legacy, settings: sampleSchool(), apiKey: { nil }, transport: offline).snapshot(for: date).day == nil, "legacy timetable shown for another school")
+        try expect(MealStore(paths: legacy, settings: .legacyDefault, apiKey: { nil }, transport: offline).snapshot(for: date).day?.meal(.lunch)?.dishes == ["옛 급식"], "legacy meals lost")
+    })
+
     print("\(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")")
     return failures
 }
@@ -1180,6 +1503,22 @@ private func timetableJSON(total: Int, rows: [(String, String)], ymd: String = "
     let body = rows.map { #"{"ALL_TI_YMD":"\#(ymd)","PERIO":"\#($0.0)","ITRT_CNTNT":"\#($0.1)"}"# }.joined(separator: ",")
     return #"{"hisTimetable":[{"head":[{"list_total_count":\#(total)},{"RESULT":{"CODE":"INFO-000","MESSAGE":"ok"}}]},{"row":[\#(body)]}]}"#
 }
+
+
+private func sampleSchool(kind: SchoolKind = .high, grade: Int = 1, className: String = "2") -> SchoolSettings {
+    let bell = SchoolSettings.defaultBell(officeCode: "B10", schoolCode: "7010000")
+    return SchoolSettings(officeCode: "B10", schoolCode: "7010000", schoolName: "서울예시학교", kind: kind,
+                          grade: grade, className: className, periodStartMinutes: bell.periodStartMinutes, classLength: bell.classLength)
+}
+
+private func schoolInfoJSON(total: Int, rows: [(String, String, String, String, String)]) -> String {
+    let body = rows.map {
+        #"{"SCHUL_NM":"\#($0.0)","SCHUL_KND_SC_NM":"\#($0.1)","ATPT_OFCDC_SC_CODE":"\#($0.2)","SD_SCHUL_CODE":"\#($0.3)","LCTN_SC_NM":"\#($0.4)"}"#
+    }.joined(separator: ",")
+    return #"{"schoolInfo":[{"head":[{"list_total_count":\#(total)},{"RESULT":{"CODE":"INFO-000","MESSAGE":"ok"}}]},{"row":[\#(body)]}]}"#
+}
+
+private let daedeokBell = SchoolBell(settings: .legacyDefault)
 
 private func parseError(_ data: Data) -> TimetableError? {
     do {
