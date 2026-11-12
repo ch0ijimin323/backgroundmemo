@@ -381,7 +381,7 @@ final class PlannerView: NSView {
             parts.append("이 학교 종류는 고등학교 시간표로 조회하므로 시간표가 없을 수 있습니다")
         }
         if snapshot.day?.isPartial == true {
-            parts.append("일부 교시만 표시 중 · 인증키를 입력하면 전체 표시")
+            parts.append("5교시까지만 표시 중 · 파일 메뉴 › NEIS 인증키 입력…에 키를 넣으면 전체 표시")
         }
         return parts.joined(separator: " · ")
     }
