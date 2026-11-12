@@ -1,5 +1,7 @@
 # BackgroundMemo
 
+English | [한국어](README.ko.md)
+
 A macOS notepad that lives on the desktop, under your other windows, with the wallpaper showing through.
 
 - Memo tabs with terminal-style splits and rich text
