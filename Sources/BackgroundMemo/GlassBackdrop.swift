@@ -4,8 +4,8 @@ import AppKit
 /// NSGlassEffectView restyles itself on focus changes, and offers no way to pin one state.
 final class GlassBackdrop: NSView {
     static let cornerRadius: CGFloat = 22
-    /// Share of frost over the sharp wallpaper: the midpoint between clear and fully frosted.
-    private static let frostAmount: CGFloat = 0.55
+    /// Share of frost over the sharp wallpaper: 0.55 at the clear/frosted midpoint, raised to 0.70 on request.
+    private static let frostAmount: CGFloat = 0.70
 
     override init(frame: NSRect) {
         super.init(frame: frame)

@@ -83,6 +83,15 @@ enum Alerts {
         show(message: "자동 실행 설정을 변경하지 못했습니다", information: "시스템 설정의 로그인 항목에서 변경할 수 있습니다.")
     }
 
+    static func showSchoolSettingsSaveFailed(blocked: Bool) {
+        show(
+            message: "학교 설정을 저장하지 못했습니다",
+            information: blocked
+                ? "school.json을 읽을 수 없어 덮어쓰지 않았습니다. 이번 실행 동안만 새 설정을 사용합니다."
+                : "앱 데이터 폴더에 school.json을 쓸 수 없습니다. 이번 실행 동안만 새 설정을 사용합니다."
+        )
+    }
+
     static func showKeyStoreFailed() {
         show(message: "인증키를 변경하지 못했습니다", information: "앱 데이터 폴더에 인증키를 저장하거나 지울 수 없습니다.")
     }

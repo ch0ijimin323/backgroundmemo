@@ -7,16 +7,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let paths = AppPaths.standard()
         let neisKeyStore = NEISKeyStore(paths: paths)
+        // Before the workspace loads: a missing workspace.json is how a new install is recognized,
+        // and loading the workspace creates it.
+        let schoolSettingsStore = SchoolSettingsStore(paths: paths)
+        let school = schoolSettingsStore.load()
         let controller = WorkspaceController(
             workspaceStore: WorkspaceStore(paths: paths),
             documentStore: DocumentStore(paths: paths),
             planStore: PlanStore(paths: paths),
-            timetableStore: TimetableStore(paths: paths, apiKey: { neisKeyStore.key }),
-            neisKeyStore: neisKeyStore
+            timetableStore: TimetableStore(paths: paths, settings: school.settings, apiKey: { neisKeyStore.key }),
+            mealStore: MealStore(paths: paths, settings: school.settings, apiKey: { neisKeyStore.key }),
+            neisKeyStore: neisKeyStore,
+            schoolSettingsStore: schoolSettingsStore
         )
         self.controller = controller
         NSApp.mainMenu = MainMenu.make(controller: controller)
         controller.showWindow()
+        if school.needsSetup {
+            // After launch finishes, so the window comes up in front of the desktop-level memo window.
+            Task { @MainActor in controller.showSchoolSettings(nil) }
+        }
+    }
+
+    /// Dock icon clicked while the app is already running: show the memo window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        controller?.showWindow()
+        return false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -21,7 +21,7 @@ enum MainMenu {
 
     static func make(controller: WorkspaceController) -> NSMenu {
         let main = NSMenu()
-        main.addSubmenu(makeAppMenu())
+        main.addSubmenu(makeAppMenu(controller))
         main.addSubmenu(makeFileMenu(controller))
         main.addSubmenu(makeEditMenu())
         main.addSubmenu(makeFontMenu())
@@ -29,8 +29,11 @@ enum MainMenu {
         return main
     }
 
-    private static func makeAppMenu() -> NSMenu {
+    private static func makeAppMenu(_ controller: WorkspaceController) -> NSMenu {
         let menu = NSMenu(title: "BackgroundMemo")
+        menu.add("학교 설정…", #selector(WorkspaceController.showSchoolSettings(_:)), key: ",", target: controller)
+        menu.addItem(.separator())
+        menu.add("클릭하면 맨 앞으로", #selector(BringToFrontToggle.toggle(_:)), key: "", target: BringToFrontToggle.shared)
         menu.add("로그인 시 자동 실행", #selector(LoginItemToggle.toggle(_:)), key: "", target: LoginItemToggle.shared)
         menu.addItem(.separator())
         menu.add("BackgroundMemo 종료", #selector(NSApplication.terminate(_:)), key: "q", target: NSApp)

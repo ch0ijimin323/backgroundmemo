@@ -43,6 +43,8 @@ public enum TabKind: String, Codable, Sendable {
     case planner
     /// Fixed tab holding the to-do list. Exactly one exists.
     case todo
+    /// Fixed tab showing the school's meals for one day. Exactly one exists.
+    case meal
 }
 
 public struct Tab: Codable, Equatable, Identifiable, Sendable {

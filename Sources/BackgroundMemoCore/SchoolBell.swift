@@ -13,27 +13,29 @@ public struct SlotLesson: Equatable, Sendable {
     }
 }
 
-/// The school's bell schedule, in minutes from midnight.
-public enum SchoolBell {
-    public static let classLength = 50
-    public static let startMinutes: [Int: Int] = [
-        1: 8 * 60 + 40,
-        2: 9 * 60 + 40,
-        3: 10 * 60 + 40,
-        4: 11 * 60 + 40,
-        5: 13 * 60 + 30,
-        6: 14 * 60 + 30,
-        7: 15 * 60 + 30,
-        8: 16 * 60 + 20,
-    ]
+/// A school's bell schedule, in minutes from midnight, built from its settings.
+public struct SchoolBell: Equatable, Sendable {
+    public var classLength: Int
+    /// Period number to start minute.
+    public var startMinutes: [Int: Int]
+
+    public init(periodStartMinutes: [Int], classLength: Int) {
+        self.classLength = classLength
+        startMinutes = Dictionary(uniqueKeysWithValues: periodStartMinutes.enumerated().map { ($0.offset + 1, $0.element) })
+    }
+
+    public init(settings: SchoolSettings) {
+        self.init(periodStartMinutes: settings.periodStartMinutes, classLength: settings.classLength)
+    }
 
     /// The class occupying `minute`, or nil for a non-slot value or free time.
-    /// Periods without a bell time never appear.
-    public static func lesson(atSlot minute: Int, in day: TimetableDay) -> SlotLesson? {
+    /// Periods without a bell time never appear. A class starting between slots, such as at 08:45,
+    /// is labeled on the first slot inside it.
+    public func lesson(atSlot minute: Int, in day: TimetableDay) -> SlotLesson? {
         guard PlannerState.isSlot(minute) else { return nil }
         for entry in day.entries {
             guard let start = startMinutes[entry.period], (start..<(start + classLength)).contains(minute) else { continue }
-            return SlotLesson(entry: entry, startMinute: start, isFirstSlot: minute == start)
+            return SlotLesson(entry: entry, startMinute: start, isFirstSlot: minute - start < 10)
         }
         return nil
     }

@@ -3,10 +3,13 @@ import BackgroundMemoCore
 
 /// One day of plans in 10-minute rows, with a date header and school classes shown in their slots.
 final class PlannerView: NSView {
-    private static let rowHeight: CGFloat = 23
+    private static let rowHeight: CGFloat = 26
+    /// Room above the first boundary label and below the last row.
+    private static let gridInset: CGFloat = 8
     private static let headerHeight: CGFloat = 36
     private static let statusLineHeight: CGFloat = 18
-    private static let firstBellMinute = 8 * 60 + 40
+    /// Where other days open when no school is set.
+    private static let defaultFirstBellMinute = 8 * 60 + 40
     private static let autoscrollEdge: CGFloat = 24
     private static let autoscrollStep: CGFloat = 12
 
@@ -25,6 +28,7 @@ final class PlannerView: NSView {
     private let nextButton = TabBarView.makeSymbolButton(symbol: "chevron.right", fallback: "›", label: "다음 날")
     private let todayButton = NSButton(title: "", target: nil, action: nil)
     private let dateLabel = NSTextField(labelWithString: "")
+    private let schoolLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let document = FlippedView()
     private let scrollView: NSScrollView
@@ -62,11 +66,16 @@ final class PlannerView: NSView {
         addSubview(scrollView)
         // Always renders the page's own date, so a late response for another day cannot appear.
         timetableStore.onUpdate = { [weak self] in self?.refreshTimetable() }
-        show(date: Date())
+        show(date: Self.plannerToday())
 
+        // Midnight brings the new day's timetable; 06:00 turns the page.
         NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.calendarDayDidChange() }
         }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.calendarDayDidChange() }
+        }
+        scheduleRollover()
     }
 
     @available(*, unavailable)
@@ -89,15 +98,16 @@ final class PlannerView: NSView {
         )
         nextButton.frame = NSRect(x: dateLabel.frame.maxX + 6, y: middle, width: buttonSize, height: buttonSize)
         todayButton.frame = NSRect(x: bounds.width - 54, y: middle, width: 50, height: buttonSize)
+        schoolLabel.layoutInHeader(after: nextButton.frame, before: todayButton.frame, headerHeight: Self.headerHeight)
 
         let statusHeight = statusLabel.isHidden ? 0 : Self.statusLineHeight
         statusLabel.frame = NSRect(x: 8, y: Self.headerHeight, width: max(0, bounds.width - 16), height: statusHeight)
         let top = Self.headerHeight + statusHeight
         scrollView.frame = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bounds.height - top))
         let width = scrollView.contentSize.width
-        document.frame = NSRect(x: 0, y: 0, width: width, height: CGFloat(rows.count) * Self.rowHeight)
+        document.frame = NSRect(x: 0, y: 0, width: width, height: CGFloat(rows.count) * Self.rowHeight + Self.gridInset * 2)
         for (index, row) in rows.enumerated() {
-            row.frame = NSRect(x: 0, y: CGFloat(index) * Self.rowHeight, width: width, height: Self.rowHeight)
+            row.frame = NSRect(x: 0, y: Self.gridInset + CGFloat(index) * Self.rowHeight, width: width, height: Self.rowHeight)
         }
         applyInitialScrollIfReady()
     }
@@ -125,9 +135,10 @@ final class PlannerView: NSView {
 
     /// Today opens at the current time, or the top outside the slot range; other days at the first bell.
     private var initialScrollMinute: Int? {
-        guard isShowingToday else { return Self.firstBellMinute }
+        guard isShowingToday else { return firstBellSlot }
         let now = calendar.dateComponents([.hour, .minute], from: Date())
-        let minute = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+        var minute = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+        if minute < 360 { minute += 1440 }
         let slot = minute - minute % 10
         return PlannerState.isSlot(slot) ? slot : nil
     }
@@ -146,7 +157,28 @@ final class PlannerView: NSView {
         todayButton.action = #selector(showToday)
         dateLabel.textColor = .white
         dateLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        [previousButton, dateLabel, nextButton, todayButton].forEach(addSubview)
+        schoolLabel.configureAsSchoolLabel()
+        [previousButton, dateLabel, nextButton, schoolLabel, todayButton].forEach(addSubview)
+        updateSchoolLabel()
+    }
+
+    /// The first period's slot, so other days open at the start of school.
+    private var firstBellSlot: Int {
+        guard let first = timetableStore.settings?.periodStartMinutes.min() else { return Self.defaultFirstBellMinute }
+        let slot = first - first % 10
+        return PlannerState.isSlot(slot) ? slot : Self.defaultFirstBellMinute
+    }
+
+    private func updateSchoolLabel() {
+        schoolLabel.stringValue = timetableStore.settings.map { "\($0.schoolName) \($0.classTitle)" } ?? ""
+        needsLayout = true
+    }
+
+    /// The controller has given the store new settings. Reloads the page's classes and bell times.
+    func schoolSettingsDidChange() {
+        updateSchoolLabel()
+        timetableStore.request(date: displayedDate)
+        refreshTimetable()
     }
 
     private func buildRows() {
@@ -204,7 +236,7 @@ final class PlannerView: NSView {
         let point = document.convert(window.mouseLocationOutsideOfEventStream, from: nil)
         let slots = PlannerState.slots
         guard let startIndex = slots.firstIndex(of: drag.startMinute) else { return }
-        let index = min(max(Int(floor(point.y / Self.rowHeight)), 0), slots.count - 1)
+        let index = min(max(Int(floor((point.y - Self.gridInset) / Self.rowHeight)), 0), slots.count - 1)
         let count = max(1, index - startIndex + 1)
         guard count != drag.slots else { return }
         drag.slots = count
@@ -262,7 +294,29 @@ final class PlannerView: NSView {
 
     @objc private func showPreviousDay() { shiftDay(by: -1) }
     @objc private func showNextDay() { shiftDay(by: 1) }
-    @objc private func showToday() { show(date: Date()) }
+    @objc private func showToday() { show(date: Self.plannerToday()) }
+
+    private static func plannerToday() -> Date { PlannerState.plannerDate(for: Date()) }
+
+    private var rolloverTimer: Timer?
+
+    /// Fires at the next 06:00, when the planner day changes, then re-arms.
+    private func scheduleRollover() {
+        rolloverTimer?.invalidate()
+        guard let next = calendar.nextDate(
+            after: Date(),
+            matching: DateComponents(hour: 6, minute: 0, second: 0),
+            matchingPolicy: .nextTime
+        ) else { return }
+        let timer = Timer(fire: next.addingTimeInterval(1), interval: 0, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.calendarDayDidChange()
+                self?.scheduleRollover()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        rolloverTimer = timer
+    }
 
     private func shiftDay(by delta: Int) {
         if let date = calendar.date(byAdding: .day, value: delta, to: displayedDate) {
@@ -277,7 +331,7 @@ final class PlannerView: NSView {
         hasDeferredRollover = false
         displayedDate = calendar.startOfDay(for: date)
         let day = PlannerState.dayKey(for: displayedDate)
-        isShowingToday = day == PlannerState.dayKey(for: Date())
+        isShowingToday = day == PlannerState.dayKey(for: Self.plannerToday())
         dateLabel.stringValue = dateFormatter.string(from: displayedDate)
         for row in rows {
             row.bind(day: day, text: planStore.planner.entry(day: day, minute: row.minute))
@@ -299,10 +353,11 @@ final class PlannerView: NSView {
         hasDeferredTimetableRefresh = false
         let snapshot = timetableStore.snapshot(for: displayedDate)
         let day = snapshot.day ?? TimetableDay()
+        let bell = timetableStore.settings.map(SchoolBell.init(settings:))
         for row in rows {
-            row.setLesson(SchoolBell.lesson(atSlot: row.minute, in: day))
+            row.setLesson(bell?.lesson(atSlot: row.minute, in: day))
         }
-        let status = Self.statusText(for: snapshot)
+        let status = Self.statusText(for: snapshot, kind: timetableStore.settings?.kind)
         statusLabel.stringValue = status
         statusLabel.isHidden = status.isEmpty
         needsLayout = true
@@ -312,13 +367,18 @@ final class PlannerView: NSView {
         if hasDeferredTimetableRefresh { refreshTimetable() }
     }
 
-    private static func statusText(for snapshot: TimetableSnapshot) -> String {
+    private static func statusText(for snapshot: TimetableSnapshot, kind: SchoolKind?) -> String {
         var parts: [String] = []
         switch (snapshot.status, snapshot.day) {
+        case (.unconfigured, _): return "학교를 설정하면 시간표가 표시됩니다 · BackgroundMemo 메뉴 › 학교 설정…"
         case (.failed, nil): parts.append("시간표를 불러오지 못했습니다")
         case (.failed, _): parts.append("시간표를 불러오지 못했습니다 · 저장된 시간표 표시 중")
         case (.loading, nil): parts.append("시간표를 불러오는 중…")
         default: break
+        }
+        // Special schools and others are asked through the high school service, which may not list them.
+        if snapshot.status == .failed, kind == .other {
+            parts.append("이 학교 종류는 고등학교 시간표로 조회하므로 시간표가 없을 수 있습니다")
         }
         if snapshot.day?.isPartial == true {
             parts.append("일부 교시만 표시 중 · 인증키를 입력하면 전체 표시")
@@ -334,13 +394,15 @@ final class PlannerView: NSView {
         timetableStore.request(date: Date())
         guard isShowingToday else {
             // The page being viewed may have just become today.
-            isShowingToday = PlannerState.dayKey(for: displayedDate) == PlannerState.dayKey(for: Date())
+            isShowingToday = PlannerState.dayKey(for: displayedDate) == PlannerState.dayKey(for: Self.plannerToday())
             return
         }
+        // Midnight does not change the planner day, so the page stays until 06:00.
+        guard PlannerState.dayKey(for: displayedDate) != PlannerState.dayKey(for: Self.plannerToday()) else { return }
         if hasMarkedFieldText {
             hasDeferredRollover = true
         } else {
-            show(date: Date())
+            show(date: Self.plannerToday())
         }
     }
 
@@ -349,7 +411,7 @@ final class PlannerView: NSView {
         guard hasDeferredRollover else { return }
         Task { @MainActor [weak self] in
             guard let self, self.hasDeferredRollover, !self.hasMarkedFieldText else { return }
-            self.show(date: Date())
+            self.show(date: Self.plannerToday())
         }
     }
 }
@@ -378,11 +440,10 @@ private final class PlannerRow: NSView, NSTextFieldDelegate {
     private let timeLabel: NSTextField
     private let lessonLabel = NSTextField(labelWithString: "")
 
-    private var endsHour: Bool { (minute + 10) % 60 == 0 }
 
     init(minute: Int) {
         self.minute = minute
-        timeLabel = NSTextField(labelWithString: String(format: "%02d:%02d", minute / 60, minute % 60))
+        timeLabel = NSTextField(labelWithString: String(format: "%02d:%02d", minute % 1440 / 60, minute % 60))
         super.init(frame: .zero)
         timeLabel.textColor = NSColor.white.withAlphaComponent(minute % 60 == 0 ? 0.95 : 0.4)
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: minute % 60 == 0 ? .semibold : .regular)
@@ -409,8 +470,11 @@ private final class PlannerRow: NSView, NSTextFieldDelegate {
 
     override func layout() {
         super.layout()
+        // The time label straddles the top edge, so half of it is drawn above this row.
+        clipsToBounds = false
         let timeHeight = ceil(timeLabel.intrinsicContentSize.height)
-        timeLabel.frame = NSRect(x: 8, y: (bounds.height - timeHeight) / 2, width: 40, height: timeHeight)
+        // The time sits on the row's top boundary, so the entry reads as the span up to the next time.
+        timeLabel.frame = NSRect(x: 8, y: -timeHeight / 2, width: 40, height: timeHeight)
 
         // The class label takes its own column, so it can never cover the entry text.
         var fieldX = timeLabel.frame.maxX + 8
@@ -438,14 +502,12 @@ private final class PlannerRow: NSView, NSTextFieldDelegate {
             bounds.fill()
         }
         // Adjacent classes and spans would otherwise read as one continuous band.
-        if lesson?.isFirstSlot == true || span?.isStart == true {
-            NSColor.white.withAlphaComponent(0.4).setFill()
-            NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
-        }
-        if endsHour {
-            NSColor.white.withAlphaComponent(0.14).setFill()
-            NSRect(x: 8, y: bounds.height - 1, width: bounds.width - 16, height: 1).fill()
-        }
+        // Every row's top edge is the boundary its time label names.
+        let lineX = timeLabel.frame.maxX + 6
+        let startsBand = lesson?.isFirstSlot == true || span?.isStart == true
+        let alpha: CGFloat = startsBand ? 0.4 : (minute % 60 == 0 ? 0.16 : 0.06)
+        NSColor.white.withAlphaComponent(alpha).setFill()
+        NSRect(x: lineX, y: 0, width: max(0, bounds.width - lineX - 8), height: 1).fill()
     }
 
     func setLesson(_ newLesson: SlotLesson?) {

@@ -10,7 +10,10 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
     private let documentStore: DocumentStore
     private let planStore: PlanStore
     private let timetableStore: TimetableStore
+    private let mealStore: MealStore
     private let neisKeyStore: NEISKeyStore
+    private let schoolSettingsStore: SchoolSettingsStore
+    private var schoolSettingsWindow: SchoolSettingsWindowController?
     private var state: WorkspaceState
 
     private let window: DesktopWindow
@@ -18,6 +21,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
     private let splitContainer = SplitContainerView()
     private let plannerView: PlannerView
     private let todoView: TodoView
+    private let mealView: MealView
 
     /// Views for every pane opened so far, including those in background tabs.
     private var paneViews: [UUID: PaneView] = [:]
@@ -29,15 +33,20 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         documentStore: DocumentStore,
         planStore: PlanStore,
         timetableStore: TimetableStore,
-        neisKeyStore: NEISKeyStore
+        mealStore: MealStore,
+        neisKeyStore: NEISKeyStore,
+        schoolSettingsStore: SchoolSettingsStore
     ) {
         self.workspaceStore = workspaceStore
         self.documentStore = documentStore
         self.planStore = planStore
         self.timetableStore = timetableStore
+        self.mealStore = mealStore
         self.neisKeyStore = neisKeyStore
+        self.schoolSettingsStore = schoolSettingsStore
         plannerView = PlannerView(planStore: planStore, timetableStore: timetableStore)
         todoView = TodoView(planStore: planStore)
+        mealView = MealView(mealStore: mealStore)
         let loaded = workspaceStore.load()
         state = loaded.state
         window = DesktopWindow(contentRect: WindowPlacement.initialFrame(saved: loaded.state.windowFrame))
@@ -78,6 +87,8 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         workspaceSaveTask?.cancel()
         saveWorkspaceNow()
         timetableStore.flush()
+        // Logged only inside the store; meals can be fetched again.
+        mealStore.flush()
         return SaveFailures(documents: documentStore.flush(), planFiles: planStore.flush())
     }
 
@@ -109,6 +120,42 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
             log.error("NEIS key file update failed")
             Alerts.showKeyStoreFailed()
         }
+    }
+
+    /// Opens the school settings window, or brings it forward when it is already open.
+    @objc func showSchoolSettings(_ sender: Any?) {
+        if let open = schoolSettingsWindow {
+            open.present()
+            return
+        }
+        let controller = SchoolSettingsWindowController(
+            current: timetableStore.settings,
+            apiKey: { [neisKeyStore] in neisKeyStore.key }
+        )
+        controller.onSave = { [weak self] settings in self?.applySchoolSettings(settings) }
+        controller.onClose = { [weak self] in
+            guard let self else { return }
+            self.schoolSettingsWindow = nil
+            self.window.makeKey()
+            self.focusSelectedPane()
+        }
+        schoolSettingsWindow = controller
+        controller.present()
+    }
+
+    /// Saves the settings and switches the timetable and meals to them. A failed save still applies
+    /// them for this session, so the user sees their school, and says the file was not written.
+    private func applySchoolSettings(_ settings: SchoolSettings) {
+        do {
+            try schoolSettingsStore.save(settings)
+        } catch {
+            log.error("School settings save failed: \(String(describing: error), privacy: .public)")
+            Alerts.showSchoolSettingsSaveFailed(blocked: error as? SchoolSettingsError == .saveBlocked)
+        }
+        timetableStore.setSettings(settings)
+        mealStore.setSettings(settings)
+        plannerView.schoolSettingsDidChange()
+        mealView.schoolSettingsDidChange()
     }
 
     @objc func closeFocusedPane(_ sender: Any?) {
@@ -246,7 +293,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         let root = WorkspaceRootView(
             frame: backdrop.bounds,
             tabBar: tabBar,
-            contentViews: [splitContainer, plannerView, todoView]
+            contentViews: [splitContainer, plannerView, todoView, mealView]
         )
         root.autoresizingMask = [.width, .height]
         backdrop.addSubview(root)
@@ -298,6 +345,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         splitContainer.isHidden = kind != .memo
         plannerView.isHidden = kind != .planner
         todoView.isHidden = kind != .todo
+        mealView.isHidden = kind != .meal
         MainMenu.setFontMenuEnabled(kind == .memo)
     }
 
@@ -319,7 +367,7 @@ final class WorkspaceController: NSObject, NSWindowDelegate, NSMenuItemValidatio
         switch state.selectedTab.kind {
         case .memo:
             focusMemoPane()
-        case .planner:
+        case .planner, .meal:
             if tabBar.isRenaming { window.makeFirstResponder(nil) }
         case .todo:
             todoView.focusInput()
